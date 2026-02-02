@@ -41,7 +41,7 @@
             echo "  pnpm install            # deps"
             echo "  pnpm build              # build"
             echo "  pnpm lint               # type check"
-            echo "  ./release.sh --dry-run  # release preview"
+            echo "  ./scripts/release.sh --dry-run  # release preview"
             echo ""
           '';
         };

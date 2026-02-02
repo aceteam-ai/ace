@@ -24,8 +24,8 @@ node dist/index.js init
 node dist/index.js workflow run examples/hello.json --input prompt="test"
 
 # Release
-./release.sh -v v0.2.0 --dry-run  # Preview release
-./release.sh -v v0.2.0 -y         # Publish to npm + GitHub
+./scripts/release.sh -v v0.2.0 --dry-run  # Preview release
+./scripts/release.sh -v v0.2.0 -y         # Publish to npm + GitHub
 ```
 
 ## Architecture
