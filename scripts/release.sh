@@ -83,7 +83,7 @@ run_cmd() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR/.."
 
 echo "Release Automation: @aceteam/ace"
 if [[ "$DRY_RUN" == true ]]; then
@@ -173,7 +173,12 @@ if [[ "$DRY_RUN" == true ]]; then
     echo -e "${BLUE}[DRY-RUN] Would update package.json version to $VERSION_NUM${NC}"
     echo -e "${BLUE}[DRY-RUN] Would update src/index.ts .version() to $VERSION_NUM${NC}"
 else
-    pnpm version "$VERSION_NUM" --no-git-tag-version
+    CURRENT_PKG_VERSION=$(node -p "require('./package.json').version")
+    if [[ "$CURRENT_PKG_VERSION" != "$VERSION_NUM" ]]; then
+        pnpm version "$VERSION_NUM" --no-git-tag-version
+    else
+        echo "package.json already at $VERSION_NUM"
+    fi
     sed -i "s/\.version(\"[^\"]*\")/.version(\"$VERSION_NUM\")/" src/index.ts
 fi
 echo "Done"
