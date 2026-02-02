@@ -1,0 +1,68 @@
+{
+  "name": "Entity Extraction Pipeline",
+  "description": "Extract entities and relations from text using the configured extraction backend.",
+  "nodes": [
+    {
+      "id": "extraction",
+      "type": "Extraction",
+      "params": {
+        "backend": "gliner2",
+        "confidence_threshold": "0.5"
+      },
+      "position": { "x": 400, "y": 200 }
+    }
+  ],
+  "edges": [],
+  "input_edges": [
+    {
+      "input_key": "text",
+      "target_id": "extraction",
+      "target_key": "text"
+    },
+    {
+      "input_key": "extraction_schema",
+      "target_id": "extraction",
+      "target_key": "extraction_schema"
+    }
+  ],
+  "output_edges": [
+    {
+      "source_id": "extraction",
+      "source_key": "result",
+      "output_key": "result"
+    }
+  ],
+  "inputs": [
+    {
+      "name": "text",
+      "type": "LONG_TEXT",
+      "display_name": "Text Content",
+      "description": "The text to extract entities and relations from"
+    },
+    {
+      "name": "extraction_schema",
+      "type": "JSON",
+      "display_name": "Extraction Schema",
+      "description": "JSON schema defining entity types and relation types to extract",
+      "default": {
+        "entity_types": [
+          { "type_id": "person" },
+          { "type_id": "organization" },
+          { "type_id": "location" }
+        ],
+        "relation_types": [
+          { "type_id": "works_at", "description": "Person works at organization" },
+          { "type_id": "located_in", "description": "Entity is located in a place" }
+        ]
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "name": "result",
+      "type": "JSON",
+      "display_name": "Extraction Result",
+      "description": "Extracted entities and relations with confidence scores (V2 ExtractionResult)"
+    }
+  ]
+}
