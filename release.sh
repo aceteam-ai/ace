@@ -92,7 +92,7 @@ fi
 echo ""
 
 # --- Check Prerequisites ---
-for cmd in gh node pnpm; do
+for cmd in gh node pnpm npm; do
     if ! command -v "$cmd" &> /dev/null; then
         echo -e "${RED}Error: $cmd is not installed.${NC}"
         exit 1
@@ -173,7 +173,7 @@ if [[ "$DRY_RUN" == true ]]; then
     echo -e "${BLUE}[DRY-RUN] Would update package.json version to $VERSION_NUM${NC}"
     echo -e "${BLUE}[DRY-RUN] Would update src/index.ts .version() to $VERSION_NUM${NC}"
 else
-    npm version "$VERSION_NUM" --no-git-tag-version
+    pnpm version "$VERSION_NUM" --no-git-tag-version
     sed -i "s/\.version(\"[^\"]*\")/.version(\"$VERSION_NUM\")/" src/index.ts
 fi
 echo "Done"
@@ -191,20 +191,29 @@ echo "Done"
 # Step 3: Git commit + tag + push
 echo ""
 echo -e "${GREEN}Step 3/6: Creating git commit and tag${NC}"
-run_cmd git add package.json src/index.ts
-run_cmd git commit -m "release: $VERSION"
-run_cmd git tag -a "$VERSION" -m "$VERSION"
-run_cmd git push origin "$(git branch --show-current)"
-run_cmd git push origin "$VERSION"
+if [[ "$DRY_RUN" == true ]]; then
+    echo -e "${BLUE}[DRY-RUN] Would commit version bump and create tag $VERSION${NC}"
+else
+    git add package.json src/index.ts
+    # Commit only if there are staged changes (version might already be set)
+    if git diff --cached --quiet; then
+        echo "Version already at $VERSION_NUM, no commit needed"
+    else
+        git commit -m "release: $VERSION"
+    fi
+    git tag -a "$VERSION" -m "$VERSION"
+    git push origin "$(git branch --show-current)"
+    git push origin "$VERSION"
+fi
 echo "Done"
 
 # Step 4: Publish to npm
 echo ""
 echo -e "${GREEN}Step 4/6: Publishing to npm${NC}"
 if [[ "$DRY_RUN" == true ]]; then
-    echo -e "${BLUE}[DRY-RUN] Would execute: npm publish --access public${NC}"
+    echo -e "${BLUE}[DRY-RUN] Would execute: pnpm publish --access public --no-git-checks${NC}"
 else
-    npm publish --access public
+    pnpm publish --access public --no-git-checks
 fi
 echo "Done"
 
