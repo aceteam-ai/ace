@@ -8,6 +8,8 @@ const CONFIG_PATH = join(CONFIG_DIR, "config.yaml");
 
 export interface AceConfig {
   default_model?: string;
+  fabric_url?: string;
+  fabric_api_key?: string;
 }
 
 export function getConfigPath(): string {

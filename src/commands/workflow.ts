@@ -10,6 +10,8 @@ import {
   validateWorkflow,
   listNodes,
 } from "../utils/python.js";
+import { loadConfig } from "../utils/config.js";
+import { FabricClient } from "../utils/fabric.js";
 import * as output from "../utils/output.js";
 
 async function ensurePython(): Promise<string> {
@@ -51,6 +53,56 @@ function parseInputArgs(inputs: string[]): Record<string, string> {
   return result;
 }
 
+async function runRemoteWorkflow(
+  file: string,
+  input: Record<string, string>
+): Promise<void> {
+  const config = loadConfig();
+  if (!config.fabric_url || !config.fabric_api_key) {
+    output.error(
+      "Fabric not configured. Run: ace fabric login"
+    );
+    process.exit(1);
+  }
+
+  const client = new FabricClient(config.fabric_url, config.fabric_api_key);
+
+  const discoverSpinner = ora("Discovering available nodes...").start();
+  try {
+    const nodes = (await client.discover()) as Array<Record<string, unknown>>;
+    if (!Array.isArray(nodes) || nodes.length === 0) {
+      discoverSpinner.fail("No remote nodes available");
+      process.exit(1);
+    }
+    discoverSpinner.succeed(
+      `Found ${nodes.length} node${nodes.length === 1 ? "" : "s"}`
+    );
+  } catch (err) {
+    discoverSpinner.fail("Failed to discover nodes");
+    output.error(String(err));
+    process.exit(1);
+  }
+
+  const workflow = JSON.parse(readFileSync(file, "utf-8"));
+
+  const runSpinner = ora("Enqueuing workflow on Fabric...").start();
+  try {
+    const result = (await client.enqueueWorkflow(workflow, input)) as Record<
+      string,
+      unknown
+    >;
+    runSpinner.succeed("Workflow enqueued");
+
+    console.log();
+    console.log(chalk.bold("Result:"));
+    console.log(JSON.stringify(result, null, 2));
+  } catch (err) {
+    runSpinner.fail("Remote workflow execution failed");
+    output.error(String(err));
+    process.exit(1);
+  }
+}
+
 export const workflowCommand = new Command("workflow")
   .description("Workflow operations");
 
@@ -60,10 +112,16 @@ workflowCommand
   .option("-i, --input <key=value...>", "Input values", [])
   .option("-v, --verbose", "Show progress messages")
   .option("--config <path>", "Config file path")
+  .option("--remote", "Run on remote Fabric node instead of locally")
   .action(
     async (
       file: string,
-      options: { input: string[]; verbose?: boolean; config?: string }
+      options: {
+        input: string[];
+        verbose?: boolean;
+        config?: string;
+        remote?: boolean;
+      }
     ) => {
       // Check file exists
       if (!existsSync(file)) {
@@ -79,8 +137,16 @@ workflowCommand
         process.exit(1);
       }
 
-      const pythonPath = await ensurePython();
       const input = parseInputArgs(options.input);
+
+      // Remote execution via Fabric
+      if (options.remote) {
+        await runRemoteWorkflow(file, input);
+        return;
+      }
+
+      // Local execution via Python
+      const pythonPath = await ensurePython();
 
       const spinner = ora("Running workflow...").start();
 
