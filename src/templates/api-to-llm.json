@@ -1,0 +1,64 @@
+{
+  "name": "API to LLM",
+  "description": "Fetch a URL then summarize the content with an LLM.",
+  "nodes": [
+    {
+      "id": "fetch",
+      "type": "APICall",
+      "params": {
+        "method": "GET",
+        "headers": "{}"
+      },
+      "position": { "x": 300, "y": 200 }
+    },
+    {
+      "id": "summarize",
+      "type": "LLM",
+      "params": {
+        "model": "gpt-4o-mini",
+        "temperature": "0.5",
+        "max_tokens": "1024",
+        "system_prompt": "Summarize the following content concisely."
+      },
+      "position": { "x": 600, "y": 200 }
+    }
+  ],
+  "edges": [
+    {
+      "source_id": "fetch",
+      "source_key": "response_body",
+      "target_id": "summarize",
+      "target_key": "prompt"
+    }
+  ],
+  "input_edges": [
+    {
+      "input_key": "url",
+      "target_id": "fetch",
+      "target_key": "url"
+    }
+  ],
+  "output_edges": [
+    {
+      "source_id": "summarize",
+      "source_key": "response",
+      "output_key": "summary"
+    }
+  ],
+  "inputs": [
+    {
+      "name": "url",
+      "type": "TEXT",
+      "display_name": "URL",
+      "description": "The URL to fetch and summarize"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "summary",
+      "type": "LONG_TEXT",
+      "display_name": "Summary",
+      "description": "LLM summary of the fetched content"
+    }
+  ]
+}

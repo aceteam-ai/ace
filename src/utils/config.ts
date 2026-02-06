@@ -10,6 +10,8 @@ export interface AceConfig {
   default_model?: string;
   fabric_url?: string;
   fabric_api_key?: string;
+  python_path?: string;
+  venv_dir?: string;
 }
 
 export function getConfigPath(): string {

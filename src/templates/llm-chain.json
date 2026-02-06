@@ -1,0 +1,66 @@
+{
+  "name": "LLM Chain",
+  "description": "Two-step LLM pipeline: draft then refine.",
+  "nodes": [
+    {
+      "id": "draft",
+      "type": "LLM",
+      "params": {
+        "model": "gpt-4o-mini",
+        "temperature": "0.8",
+        "max_tokens": "1024",
+        "system_prompt": "You are a helpful assistant. Write a first draft based on the prompt."
+      },
+      "position": { "x": 300, "y": 200 }
+    },
+    {
+      "id": "refine",
+      "type": "LLM",
+      "params": {
+        "model": "gpt-4o-mini",
+        "temperature": "0.3",
+        "max_tokens": "1024",
+        "system_prompt": "You are an editor. Refine and improve the following draft. Make it clearer and more concise."
+      },
+      "position": { "x": 600, "y": 200 }
+    }
+  ],
+  "edges": [
+    {
+      "source_id": "draft",
+      "source_key": "response",
+      "target_id": "refine",
+      "target_key": "prompt"
+    }
+  ],
+  "input_edges": [
+    {
+      "input_key": "prompt",
+      "target_id": "draft",
+      "target_key": "prompt"
+    }
+  ],
+  "output_edges": [
+    {
+      "source_id": "refine",
+      "source_key": "response",
+      "output_key": "response"
+    }
+  ],
+  "inputs": [
+    {
+      "name": "prompt",
+      "type": "LONG_TEXT",
+      "display_name": "Prompt",
+      "description": "The initial prompt for the draft"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "response",
+      "type": "LONG_TEXT",
+      "display_name": "Refined Response",
+      "description": "The refined LLM response"
+    }
+  ]
+}
