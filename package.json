@@ -1,6 +1,6 @@
 {
   "name": "@aceteam/ace",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "AceTeam CLI - Run AI workflows locally",
   "type": "module",
   "bin": {
