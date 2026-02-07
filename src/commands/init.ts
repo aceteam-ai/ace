@@ -135,15 +135,21 @@ export const initCommand = new Command("init")
     console.log(`  ${chalk.green("✓")} Config: ${configPath}`);
     console.log(`  ${chalk.green("✓")} Model: ${config.default_model}`);
 
-    // API key reminder
+    // LLM provider reminder
     console.log(
       "\n" +
-        chalk.bold("API Keys:") +
-        "\n  Set your API key as an environment variable:" +
+        chalk.bold("LLM Provider:") +
+        "\n  Cloud — set an API key:" +
         "\n  " +
         chalk.dim("export OPENAI_API_KEY=sk-...") +
         "\n  " +
         chalk.dim("export ANTHROPIC_API_KEY=sk-ant-...") +
+        "\n" +
+        "\n  Local — use Ollama or any OpenAI-compatible server:" +
+        "\n  " +
+        chalk.dim("ollama serve && ollama pull llama3") +
+        "\n  " +
+        chalk.dim("# then set model to ollama/llama3 in your workflow") +
         "\n"
     );
 

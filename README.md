@@ -8,9 +8,18 @@ AceTeam CLI - Run AI workflows locally from your terminal.
 ## Install
 
 ```bash
+# From npm (once published)
 npm install -g @aceteam/ace
-# or
+
+# Or run without installing
 npx @aceteam/ace
+
+# Or build from source
+git clone https://github.com/aceteam-ai/ace.git
+cd ace
+pnpm install && pnpm build
+node dist/index.js          # run directly
+npm link                    # or install globally as `ace`
 ```
 
 ## Quick Start
@@ -58,7 +67,7 @@ The TypeScript CLI handles file validation, Python detection, and output formatt
 
 - Node.js 18+
 - Python 3.12+ (for workflow execution)
-- An API key for your LLM provider (e.g. `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`)
+- An LLM provider — cloud API key **or** a local model server (see below)
 
 ## Commands
 
@@ -165,6 +174,57 @@ Discover available Citadel nodes on the Fabric.
 ### `ace fabric status`
 
 Show connected node load metrics.
+
+## Using Local LLMs (Ollama, vLLM, etc.)
+
+Workflows use [litellm](https://docs.litellm.ai/) under the hood, which supports 100+ LLM providers — including local model servers. No API key needed for local models.
+
+### Ollama
+
+```bash
+# 1. Start Ollama (https://ollama.com)
+ollama serve
+ollama pull llama3
+
+# 2. Create a workflow using the Ollama model
+ace workflow create hello-llm -o local-chat.json
+# When prompted for "model", enter: ollama/llama3
+
+# 3. Run it
+ace workflow run local-chat.json --input prompt="Hello from local LLM"
+```
+
+### vLLM
+
+```bash
+# 1. Start vLLM server
+vllm serve meta-llama/Llama-3-8b --port 8000
+
+# 2. Set the base URL and create a workflow
+export OPENAI_API_BASE=http://localhost:8000/v1
+ace workflow create hello-llm -o vllm-chat.json
+# When prompted for "model", enter: openai/meta-llama/Llama-3-8b
+
+# 3. Run it
+ace workflow run vllm-chat.json --input prompt="Hello from vLLM"
+```
+
+### Cloud APIs
+
+```bash
+export OPENAI_API_KEY=sk-...          # OpenAI
+export ANTHROPIC_API_KEY=sk-ant-...   # Anthropic
+export GEMINI_API_KEY=...             # Google Gemini
+```
+
+The model name in your workflow JSON determines which provider is used. Examples:
+- `gpt-4o-mini` — OpenAI
+- `claude-3-haiku-20240307` — Anthropic
+- `gemini/gemini-pro` — Google
+- `ollama/llama3` — Ollama (local)
+- `openai/model-name` + `OPENAI_API_BASE` — vLLM, LM Studio, or any OpenAI-compatible server
+
+See [litellm provider docs](https://docs.litellm.ai/docs/providers) for the full list.
 
 ## Development
 
