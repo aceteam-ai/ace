@@ -1,0 +1,47 @@
+{
+  "name": "Hello LLM",
+  "description": "Send a prompt to an LLM and get a response.",
+  "nodes": [
+    {
+      "id": "llm",
+      "type": "LLM",
+      "params": {
+        "model": "gpt-4o-mini",
+        "temperature": "0.7",
+        "max_tokens": "1024"
+      },
+      "position": { "x": 400, "y": 200 }
+    }
+  ],
+  "edges": [],
+  "input_edges": [
+    {
+      "input_key": "prompt",
+      "target_id": "llm",
+      "target_key": "prompt"
+    }
+  ],
+  "output_edges": [
+    {
+      "source_id": "llm",
+      "source_key": "response",
+      "output_key": "response"
+    }
+  ],
+  "inputs": [
+    {
+      "name": "prompt",
+      "type": "LONG_TEXT",
+      "display_name": "Prompt",
+      "description": "The prompt to send to the LLM"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "response",
+      "type": "LONG_TEXT",
+      "display_name": "Response",
+      "description": "The LLM response"
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 import { Command } from "commander";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline/promises";
+import { stdin, stdout } from "node:process";
 import chalk from "chalk";
 import ora from "ora";
 import {
@@ -9,12 +11,34 @@ import {
   runWorkflow,
   validateWorkflow,
   listNodes,
+  getVenvPythonPath,
+  isVenvValid,
 } from "../utils/python.js";
 import { loadConfig } from "../utils/config.js";
 import { FabricClient } from "../utils/fabric.js";
+import { classifyPythonError } from "../utils/errors.js";
+import { TEMPLATES, getTemplateById } from "../templates/index.js";
 import * as output from "../utils/output.js";
 
 async function ensurePython(): Promise<string> {
+  const config = loadConfig();
+
+  // Check config python_path first (managed venv)
+  if (config.python_path && existsSync(config.python_path)) {
+    if (isAceteamNodesInstalled(config.python_path)) {
+      return config.python_path;
+    }
+  }
+
+  // Check managed venv
+  if (config.venv_dir && isVenvValid(config.venv_dir)) {
+    const venvPython = getVenvPythonPath(config.venv_dir);
+    if (isAceteamNodesInstalled(venvPython)) {
+      return venvPython;
+    }
+  }
+
+  // Fallback to PATH detection
   const pythonPath = await findPython();
   if (!pythonPath) {
     output.error(
@@ -110,7 +134,7 @@ workflowCommand
   .command("run <file>")
   .description("Run a workflow from a JSON file")
   .option("-i, --input <key=value...>", "Input values", [])
-  .option("-v, --verbose", "Show progress messages")
+  .option("-v, --verbose", "Show raw stderr debug output")
   .option("--config <path>", "Config file path")
   .option("--remote", "Run on remote Fabric node instead of locally")
   .action(
@@ -154,6 +178,26 @@ workflowCommand
         const result = await runWorkflow(pythonPath, file, input, {
           verbose: options.verbose,
           config: options.config,
+          onProgress: (event) => {
+            switch (event.type) {
+              case "started":
+                spinner.text = `Running workflow (${event.totalNodes} nodes)...`;
+                break;
+              case "node_running":
+                if (event.totalNodes && event.currentNode) {
+                  spinner.text = `Running node ${event.currentNode}/${event.totalNodes}: ${event.nodeName}...`;
+                } else {
+                  spinner.text = `Running ${event.nodeName}...`;
+                }
+                break;
+              case "node_done":
+                // Keep spinner going, text will update on next event
+                break;
+              case "node_error":
+                spinner.text = `Error in ${event.nodeName}: ${event.message}`;
+                break;
+            }
+          },
         });
 
         if (result.success) {
@@ -163,19 +207,26 @@ workflowCommand
           console.log(JSON.stringify(result.output, null, 2));
         } else {
           spinner.fail("Workflow failed");
-          if (result.errors) {
-            console.error(
-              chalk.red(JSON.stringify(result.errors, null, 2))
-            );
-          }
-          if (result.error) {
-            console.error(chalk.red(result.error));
+
+          const rawError =
+            result.error ||
+            (result.errors ? JSON.stringify(result.errors) : "Unknown error");
+          const classified = classifyPythonError(rawError);
+
+          console.error(chalk.red(classified.message));
+          if (classified.suggestion) {
+            console.error(chalk.dim(classified.suggestion));
           }
           process.exit(1);
         }
       } catch (err) {
         spinner.fail("Workflow execution error");
-        console.error(chalk.red(String(err)));
+
+        const classified = classifyPythonError(String(err));
+        console.error(chalk.red(classified.message));
+        if (classified.suggestion) {
+          console.error(chalk.dim(classified.suggestion));
+        }
         process.exit(1);
       }
     }
@@ -250,4 +301,121 @@ workflowCommand
       ["Type", "Name", "Description"],
       nodes.map((n) => [n.type, n.display_name, n.description])
     );
+  });
+
+workflowCommand
+  .command("list-templates")
+  .description("List available workflow templates")
+  .option("--category <name>", "Filter by category")
+  .action((options: { category?: string }) => {
+    let templates = TEMPLATES;
+
+    if (options.category) {
+      const cat = options.category.toLowerCase();
+      templates = templates.filter((t) => t.category.toLowerCase() === cat);
+    }
+
+    if (templates.length === 0) {
+      output.warn("No templates found");
+      if (options.category) {
+        const categories = [...new Set(TEMPLATES.map((t) => t.category))];
+        console.log(`  Available categories: ${categories.join(", ")}`);
+      }
+      return;
+    }
+
+    output.printTable(
+      ["ID", "Name", "Category", "Inputs"],
+      templates.map((t) => [
+        t.id,
+        t.name,
+        t.category,
+        t.inputs.join(", "),
+      ])
+    );
+  });
+
+workflowCommand
+  .command("create [template-id]")
+  .description("Create a workflow from a template")
+  .option("-o, --output <file>", "Output file path", "workflow.json")
+  .action(async (templateId: string | undefined, options: { output: string }) => {
+    const rl = createInterface({ input: stdin, output: stdout });
+
+    try {
+      // If no template ID, show list and prompt
+      if (!templateId) {
+        console.log(chalk.bold("\nAvailable templates:\n"));
+        TEMPLATES.forEach((t, i) => {
+          console.log(`  ${chalk.cyan(`${i + 1})`)} ${t.name} ${chalk.dim(`- ${t.description}`)}`);
+        });
+        console.log();
+
+        const answer = await rl.question("Select template (number): ");
+        const index = parseInt(answer, 10) - 1;
+
+        if (isNaN(index) || index < 0 || index >= TEMPLATES.length) {
+          output.error("Invalid selection");
+          return;
+        }
+
+        templateId = TEMPLATES[index].id;
+      }
+
+      const template = getTemplateById(templateId);
+      if (!template) {
+        output.error(`Template not found: ${templateId}`);
+        const ids = TEMPLATES.map((t) => t.id).join(", ");
+        console.log(`  Available: ${ids}`);
+        return;
+      }
+
+      // Load template workflow JSON
+      const workflow = structuredClone(template.workflow);
+
+      // Prompt for node parameter customization
+      const nodes = workflow.nodes as Array<{
+        id: string;
+        type: string;
+        params: Record<string, string>;
+      }>;
+
+      if (nodes.length > 0) {
+        console.log(chalk.bold("\nCustomize node parameters (Enter to keep default):\n"));
+
+        for (const node of nodes) {
+          if (node.params && Object.keys(node.params).length > 0) {
+            console.log(`  ${chalk.cyan(node.type)} (${node.id}):`);
+            for (const [key, defaultVal] of Object.entries(node.params)) {
+              const answer = await rl.question(
+                `    ${key} [${defaultVal}]: `
+              );
+              if (answer.trim()) {
+                node.params[key] = answer.trim();
+              }
+            }
+          }
+        }
+      }
+
+      // Write output
+      const outputPath = options.output;
+      writeFileSync(outputPath, JSON.stringify(workflow, null, 2) + "\n", "utf-8");
+
+      output.success(`Created ${outputPath}`);
+
+      // Build a helpful run command
+      const inputNames = (workflow.inputs as Array<{ name: string }>).map(
+        (i) => i.name
+      );
+      const inputArgs = inputNames
+        .map((name) => `${name}='...'`)
+        .join(" --input ");
+
+      console.log(
+        chalk.dim(`\nRun: ace workflow run ${outputPath} --input ${inputArgs}`)
+      );
+    } finally {
+      rl.close();
+    }
   });

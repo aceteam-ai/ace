@@ -1,4 +1,6 @@
 import { execSync, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import which from "which";
 
 /**
@@ -10,17 +12,9 @@ export async function findPython(): Promise<string | null> {
   for (const name of candidates) {
     try {
       const resolved = await which(name);
-      const version = execSync(`${resolved} --version`, {
-        encoding: "utf-8",
-      }).trim();
-      // Parse "Python 3.X.Y"
-      const match = version.match(/Python (\d+)\.(\d+)/);
-      if (match) {
-        const major = parseInt(match[1], 10);
-        const minor = parseInt(match[2], 10);
-        if (major === 3 && minor >= 12) {
-          return resolved;
-        }
+      const version = getPythonVersion(resolved);
+      if (version && version.major === 3 && version.minor >= 12) {
+        return resolved;
       }
     } catch {
       // Not found or can't execute
@@ -28,6 +22,59 @@ export async function findPython(): Promise<string | null> {
   }
 
   return null;
+}
+
+export interface PythonVersion {
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+/**
+ * Get the Python version from a given executable path.
+ */
+export function getPythonVersion(pythonPath: string): PythonVersion | null {
+  try {
+    const output = execSync(`${pythonPath} --version`, {
+      encoding: "utf-8",
+    }).trim();
+    const match = output.match(/Python (\d+)\.(\d+)\.(\d+)/);
+    if (match) {
+      return {
+        major: parseInt(match[1], 10),
+        minor: parseInt(match[2], 10),
+        patch: parseInt(match[3], 10),
+      };
+    }
+  } catch {
+    // Can't execute
+  }
+  return null;
+}
+
+/**
+ * Create a Python virtual environment.
+ */
+export function createVenv(pythonPath: string, venvDir: string): void {
+  execSync(`${pythonPath} -m venv ${venvDir}`, { stdio: "pipe" });
+}
+
+/**
+ * Get the Python executable path inside a virtual environment.
+ */
+export function getVenvPythonPath(venvDir: string): string {
+  if (process.platform === "win32") {
+    return join(venvDir, "Scripts", "python.exe");
+  }
+  return join(venvDir, "bin", "python");
+}
+
+/**
+ * Check if a virtual environment exists and is valid.
+ */
+export function isVenvValid(venvDir: string): boolean {
+  const pythonPath = getVenvPythonPath(venvDir);
+  return existsSync(pythonPath);
 }
 
 /**
@@ -60,15 +107,74 @@ export interface RunResult {
   error?: string;
 }
 
+export interface ProgressEvent {
+  type: "started" | "node_running" | "node_done" | "node_error";
+  totalNodes?: number;
+  currentNode?: number;
+  nodeName?: string;
+  message?: string;
+}
+
+/**
+ * Parse a stderr line into a structured progress event, if applicable.
+ */
+export function parseProgressLine(line: string): ProgressEvent | null {
+  // "Workflow started (N nodes)"
+  const startMatch = line.match(/Workflow started\s*\((\d+)\s*nodes?\)/i);
+  if (startMatch) {
+    return {
+      type: "started",
+      totalNodes: parseInt(startMatch[1], 10),
+    };
+  }
+
+  // "[NodeType] running..."
+  const runningMatch = line.match(/\[([^\]]+)\]\s*running/i);
+  if (runningMatch) {
+    return {
+      type: "node_running",
+      nodeName: runningMatch[1],
+    };
+  }
+
+  // "[NodeType] done"
+  const doneMatch = line.match(/\[([^\]]+)\]\s*done/i);
+  if (doneMatch) {
+    return {
+      type: "node_done",
+      nodeName: doneMatch[1],
+    };
+  }
+
+  // "[NodeType] error: message"
+  const errorMatch = line.match(/\[([^\]]+)\]\s*error:\s*(.*)/i);
+  if (errorMatch) {
+    return {
+      type: "node_error",
+      nodeName: errorMatch[1],
+      message: errorMatch[2],
+    };
+  }
+
+  return null;
+}
+
+export interface RunOptions {
+  verbose?: boolean;
+  config?: string;
+  onProgress?: (event: ProgressEvent) => void;
+}
+
 /**
  * Run a workflow via Python subprocess.
  * Streams stderr (progress) and collects stdout (JSON result).
+ * Always passes --verbose to Python so progress events are available.
  */
 export function runWorkflow(
   pythonPath: string,
   filePath: string,
   input: Record<string, string>,
-  options: { verbose?: boolean; config?: string } = {}
+  options: RunOptions = {}
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const args = [
@@ -78,11 +184,9 @@ export function runWorkflow(
       filePath,
       "--input",
       JSON.stringify(input),
+      "--verbose",
     ];
 
-    if (options.verbose) {
-      args.push("--verbose");
-    }
     if (options.config) {
       args.push("--config", options.config);
     }
@@ -93,6 +197,8 @@ export function runWorkflow(
 
     let stdout = "";
     let stderr = "";
+    let completedNodes = 0;
+    let totalNodes = 0;
 
     proc.stdout.on("data", (data: Buffer) => {
       stdout += data.toString();
@@ -101,7 +207,32 @@ export function runWorkflow(
     proc.stderr.on("data", (data: Buffer) => {
       const text = data.toString();
       stderr += text;
-      // Stream progress messages to terminal
+
+      // Parse progress events from each line
+      const lines = text.split("\n");
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        const event = parseProgressLine(trimmed);
+        if (event) {
+          if (event.type === "started" && event.totalNodes) {
+            totalNodes = event.totalNodes;
+          }
+          if (event.type === "node_done") {
+            completedNodes++;
+            event.currentNode = completedNodes;
+            event.totalNodes = totalNodes;
+          }
+          if (event.type === "node_running") {
+            event.currentNode = completedNodes + 1;
+            event.totalNodes = totalNodes;
+          }
+          options.onProgress?.(event);
+        }
+      }
+
+      // Stream raw stderr in verbose mode
       if (options.verbose) {
         process.stderr.write(text);
       }

@@ -1,33 +1,39 @@
+import { withRetry, type RetryOptions } from "./retry.js";
+
 export class FabricClient {
   private url: string;
   private apiKey: string;
+  private retryOptions: RetryOptions;
 
-  constructor(url: string, apiKey: string) {
+  constructor(url: string, apiKey: string, retryOptions: RetryOptions = {}) {
     this.url = url.replace(/\/+$/, "");
     this.apiKey = apiKey;
+    this.retryOptions = retryOptions;
   }
 
   private async request(
     path: string,
     options: RequestInit = {}
   ): Promise<unknown> {
-    const response = await fetch(`${this.url}${path}`, {
-      ...options,
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-        ...options.headers,
-      },
-    });
+    return withRetry(async () => {
+      const response = await fetch(`${this.url}${path}`, {
+        ...options,
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+          ...options.headers,
+        },
+      });
 
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(
-        `Fabric API error (${response.status}): ${body || response.statusText}`
-      );
-    }
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(
+          `Fabric API error (${response.status}): ${body || response.statusText}`
+        );
+      }
 
-    return response.json();
+      return response.json();
+    }, this.retryOptions);
   }
 
   async discover(capability?: string): Promise<unknown> {
