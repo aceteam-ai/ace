@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import chalk from "chalk";
@@ -126,6 +126,12 @@ export const initCommand = new Command("init")
 
     saveConfig(config);
 
+    // Create patterns directory for user-defined patterns
+    const patternsDir = join(homedir(), ".ace", "patterns");
+    if (!existsSync(patternsDir)) {
+      mkdirSync(patternsDir, { recursive: true });
+    }
+
     // Step 5: Summary
     console.log(chalk.bold("\nSetup complete:"));
     console.log(
@@ -153,7 +159,7 @@ export const initCommand = new Command("init")
         "\n"
     );
 
-    console.log(chalk.dim("Try: ace workflow list-templates"));
+    console.log(chalk.dim("Try: ace run --list"));
 
     rl.close();
   });
