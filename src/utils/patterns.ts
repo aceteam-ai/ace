@@ -19,7 +19,13 @@ export function getUserPatternsDir(): string {
   return USER_PATTERNS_DIR;
 }
 
+const PATTERN_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
+
 function loadUserPattern(name: string): PatternDef | undefined {
+  if (!PATTERN_NAME_REGEX.test(name)) {
+    return undefined;
+  }
+
   const patternDir = join(USER_PATTERNS_DIR, name);
   const systemFile = join(patternDir, "system.md");
 

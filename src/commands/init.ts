@@ -37,8 +37,8 @@ export const initCommand = new Command("init")
       const candidates = ["python3", "python"];
       for (const name of candidates) {
         try {
-          const { execSync } = await import("node:child_process");
-          const version = execSync(`${name} --version`, {
+          const { execFileSync } = await import("node:child_process");
+          const version = execFileSync(name, ["--version"], {
             encoding: "utf-8",
           }).trim();
           const match = version.match(/Python (\d+\.\d+)/);

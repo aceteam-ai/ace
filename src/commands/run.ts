@@ -97,6 +97,11 @@ export const runCommand = new Command("run")
         process.exit(1);
       }
 
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(patternName)) {
+        output.error("Invalid pattern name. Use only letters, numbers, hyphens, and underscores.");
+        process.exit(1);
+      }
+
       const pattern = loadPattern(patternName);
       if (!pattern) {
         output.error(`Pattern not found: ${patternName}`);
