@@ -1,4 +1,4 @@
-import { execSync, spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import which from "which";
@@ -35,7 +35,7 @@ export interface PythonVersion {
  */
 export function getPythonVersion(pythonPath: string): PythonVersion | null {
   try {
-    const output = execSync(`${pythonPath} --version`, {
+    const output = execFileSync(pythonPath, ["--version"], {
       encoding: "utf-8",
     }).trim();
     const match = output.match(/Python (\d+)\.(\d+)\.(\d+)/);
@@ -56,7 +56,7 @@ export function getPythonVersion(pythonPath: string): PythonVersion | null {
  * Create a Python virtual environment.
  */
 export function createVenv(pythonPath: string, venvDir: string): void {
-  execSync(`${pythonPath} -m venv ${venvDir}`, { stdio: "pipe" });
+  execFileSync(pythonPath, ["-m", "venv", venvDir], { stdio: "pipe" });
 }
 
 /**
@@ -82,7 +82,7 @@ export function isVenvValid(venvDir: string): boolean {
  */
 export function isAceteamNodesInstalled(pythonPath: string): boolean {
   try {
-    execSync(`${pythonPath} -c "import aceteam_nodes"`, {
+    execFileSync(pythonPath, ["-c", "import aceteam_nodes"], {
       stdio: "pipe",
     });
     return true;
@@ -95,7 +95,7 @@ export function isAceteamNodesInstalled(pythonPath: string): boolean {
  * Install aceteam-nodes via pip.
  */
 export function installAceteamNodes(pythonPath: string): void {
-  execSync(`${pythonPath} -m pip install aceteam-nodes`, {
+  execFileSync(pythonPath, ["-m", "pip", "install", "aceteam-nodes"], {
     stdio: "inherit",
   });
 }
