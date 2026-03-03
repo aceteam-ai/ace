@@ -224,15 +224,24 @@ workflowCommand
     }
 
     // Basic structural checks (TypeScript-only)
-    if (
-      typeof jsonData !== "object" ||
-      jsonData === null ||
-      !("nodes" in jsonData) ||
-      !("inputs" in jsonData) ||
-      !("outputs" in jsonData)
-    ) {
+    // Support both v2 (input_node/inner_nodes/output_node) and v1 (nodes/inputs/outputs)
+    if (typeof jsonData !== "object" || jsonData === null) {
+      output.error("Invalid workflow: not a JSON object");
+      process.exit(1);
+    }
+
+    const isV2 =
+      "input_node" in jsonData &&
+      "inner_nodes" in jsonData &&
+      "output_node" in jsonData;
+    const isV1 =
+      "nodes" in jsonData &&
+      "inputs" in jsonData &&
+      "outputs" in jsonData;
+
+    if (!isV2 && !isV1) {
       output.error(
-        "Invalid workflow: missing required fields (nodes, inputs, outputs)"
+        "Invalid workflow: missing required fields (input_node, inner_nodes, output_node, edges)"
       );
       process.exit(1);
     }
@@ -368,8 +377,8 @@ workflowCommand
       // Load template workflow JSON
       const workflow = structuredClone(template.workflow);
 
-      // Prompt for node parameter customization
-      const nodes = workflow.nodes as Array<{
+      // Prompt for node parameter customization (v2: inner_nodes)
+      const nodes = (workflow.inner_nodes || workflow.nodes || []) as Array<{
         id: string;
         type: string;
         params: Record<string, string>;
@@ -400,9 +409,10 @@ workflowCommand
       output.success(`Created ${outputPath}`);
 
       // Build a helpful run command
-      const inputNames = (workflow.inputs as Array<{ name: string }>).map(
-        (i) => i.name
-      );
+      const inputNode = workflow.input_node as
+        | { params?: { fields?: Record<string, unknown> } }
+        | undefined;
+      const inputNames = Object.keys(inputNode?.params?.fields ?? {});
       const inputArgs = inputNames
         .map((name) => `${name}='...'`)
         .join(" --input ");

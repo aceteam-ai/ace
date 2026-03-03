@@ -1,69 +1,37 @@
 {
   "name": "Text Transform",
-  "description": "Transform text using custom instructions.",
-  "nodes": [
-    {
-      "id": "input",
-      "type": "TextInput",
-      "params": {},
-      "position": { "x": 200, "y": 200 }
-    },
+  "description": "Transform text with an LLM using custom instructions.",
+  "input_node": {
+    "id": "input",
+    "type": "Input",
+    "params": {
+      "fields": {
+        "text": { "type": "string", "title": "Input Text", "description": "The text to transform" },
+        "instructions": { "type": "string", "title": "Instructions", "description": "Transformation instructions" }
+      }
+    }
+  },
+  "output_node": {
+    "id": "output",
+    "type": "Output",
+    "params": {
+      "fields": {
+        "result": { "type": "string", "title": "Result", "description": "The transformed text" }
+      }
+    }
+  },
+  "inner_nodes": [
     {
       "id": "transform",
-      "type": "DataTransform",
+      "type": "LLM",
       "params": {
-        "instructions": "Transform the text as requested"
-      },
-      "position": { "x": 500, "y": 200 }
+        "model": "gpt-4o-mini",
+        "system_prompt": "Transform the text according to the given instructions."
+      }
     }
   ],
   "edges": [
-    {
-      "source_id": "input",
-      "source_key": "text",
-      "target_id": "transform",
-      "target_key": "input"
-    }
-  ],
-  "input_edges": [
-    {
-      "input_key": "text",
-      "target_id": "input",
-      "target_key": "text"
-    },
-    {
-      "input_key": "instructions",
-      "target_id": "transform",
-      "target_key": "instructions"
-    }
-  ],
-  "output_edges": [
-    {
-      "source_id": "transform",
-      "source_key": "output",
-      "output_key": "result"
-    }
-  ],
-  "inputs": [
-    {
-      "name": "text",
-      "type": "LONG_TEXT",
-      "display_name": "Input Text",
-      "description": "The text to transform"
-    },
-    {
-      "name": "instructions",
-      "type": "TEXT",
-      "display_name": "Instructions",
-      "description": "Transformation instructions"
-    }
-  ],
-  "outputs": [
-    {
-      "name": "result",
-      "type": "LONG_TEXT",
-      "display_name": "Result",
-      "description": "The transformed text"
-    }
+    { "source_id": "input", "source_key": "text", "target_id": "transform", "target_key": "prompt" },
+    { "source_id": "transform", "source_key": "response", "target_id": "output", "target_key": "result" }
   ]
 }

@@ -19,16 +19,15 @@ describe("workflow lifecycle", () => {
       }
     });
 
-    it("each template has valid workflow structure", () => {
+    it("each template has valid workflow structure (v2 schema)", () => {
       for (const template of TEMPLATES) {
         const wf = template.workflow;
-        expect(wf).toHaveProperty("nodes");
-        expect(wf).toHaveProperty("inputs");
-        expect(wf).toHaveProperty("outputs");
-        expect(wf).toHaveProperty("input_edges");
-        expect(wf).toHaveProperty("output_edges");
+        expect(wf).toHaveProperty("input_node");
+        expect(wf).toHaveProperty("output_node");
+        expect(wf).toHaveProperty("inner_nodes");
+        expect(wf).toHaveProperty("edges");
 
-        const nodes = wf.nodes as Array<{ id: string; type: string }>;
+        const nodes = wf.inner_nodes as Array<{ id: string; type: string }>;
         expect(nodes.length).toBeGreaterThan(0);
         for (const node of nodes) {
           expect(node.id).toBeTruthy();
@@ -60,8 +59,8 @@ describe("workflow lifecycle", () => {
       const template = getTemplateById("hello-llm")!;
       const workflow = structuredClone(template.workflow);
 
-      // Simulate customization
-      const nodes = workflow.nodes as Array<{
+      // Simulate customization via inner_nodes (v2 schema)
+      const nodes = workflow.inner_nodes as Array<{
         params: Record<string, string>;
       }>;
       nodes[0].params.model = "claude-3-haiku-20240307";
@@ -69,9 +68,9 @@ describe("workflow lifecycle", () => {
       const json = JSON.stringify(workflow, null, 2);
       const parsed = JSON.parse(json);
 
-      expect(parsed.nodes[0].params.model).toBe("claude-3-haiku-20240307");
-      expect(parsed.inputs).toBeDefined();
-      expect(parsed.outputs).toBeDefined();
+      expect(parsed.inner_nodes[0].params.model).toBe("claude-3-haiku-20240307");
+      expect(parsed.input_node).toBeDefined();
+      expect(parsed.output_node).toBeDefined();
     });
 
     it("produces valid JSON from llm-chain template", () => {
@@ -81,11 +80,11 @@ describe("workflow lifecycle", () => {
       const json = JSON.stringify(workflow, null, 2);
       const parsed = JSON.parse(json);
 
-      expect(parsed.nodes).toHaveLength(2);
-      expect(parsed.edges).toHaveLength(1);
-      // Verify edge connects draft to refine
-      expect(parsed.edges[0].source_id).toBe("draft");
-      expect(parsed.edges[0].target_id).toBe("refine");
+      expect(parsed.inner_nodes).toHaveLength(2);
+      expect(parsed.edges).toHaveLength(3);
+      // Verify edges connect input → draft → refine → output
+      expect(parsed.edges[1].source_id).toBe("draft");
+      expect(parsed.edges[1].target_id).toBe("refine");
     });
 
     it("each template can be serialized and deserialized", () => {
@@ -94,38 +93,37 @@ describe("workflow lifecycle", () => {
         const json = JSON.stringify(cloned);
         const parsed = JSON.parse(json);
 
-        expect(parsed.nodes).toEqual(cloned.nodes);
-        expect(parsed.inputs).toEqual(cloned.inputs);
-        expect(parsed.outputs).toEqual(cloned.outputs);
+        expect(parsed.inner_nodes).toEqual(cloned.inner_nodes);
+        expect(parsed.input_node).toEqual(cloned.input_node);
+        expect(parsed.output_node).toEqual(cloned.output_node);
       }
     });
   });
 
   describe("validate workflow structure", () => {
-    it("rejects workflow without nodes", () => {
-      const wf = { inputs: [], outputs: [] };
-      expect(wf).not.toHaveProperty("nodes");
+    it("rejects workflow without inner_nodes", () => {
+      const wf = { input_node: {}, output_node: {} };
+      expect(wf).not.toHaveProperty("inner_nodes");
     });
 
-    it("rejects workflow without inputs", () => {
-      const wf = { nodes: [], outputs: [] };
-      expect(wf).not.toHaveProperty("inputs");
+    it("rejects workflow without input_node", () => {
+      const wf = { inner_nodes: [], output_node: {} };
+      expect(wf).not.toHaveProperty("input_node");
     });
 
-    it("rejects workflow without outputs", () => {
-      const wf = { nodes: [], inputs: [] };
-      expect(wf).not.toHaveProperty("outputs");
+    it("rejects workflow without output_node", () => {
+      const wf = { inner_nodes: [], input_node: {} };
+      expect(wf).not.toHaveProperty("output_node");
     });
 
-    it("accepts valid workflow structure", () => {
+    it("accepts valid workflow structure (v2 schema)", () => {
       const template = getTemplateById("hello-llm")!;
       const wf = template.workflow;
 
-      expect(wf).toHaveProperty("nodes");
-      expect(wf).toHaveProperty("inputs");
-      expect(wf).toHaveProperty("outputs");
-      expect(wf).toHaveProperty("input_edges");
-      expect(wf).toHaveProperty("output_edges");
+      expect(wf).toHaveProperty("input_node");
+      expect(wf).toHaveProperty("output_node");
+      expect(wf).toHaveProperty("inner_nodes");
+      expect(wf).toHaveProperty("edges");
     });
   });
 });

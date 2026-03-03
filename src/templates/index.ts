@@ -17,9 +17,13 @@ function defineTemplate(
   category: string,
   workflow: Record<string, unknown>
 ): TemplateMetadata {
-  const inputs = (workflow.inputs as Array<{ name: string }>).map(
-    (i) => i.name
-  );
+  // Extract input field names from v2 schema (input_node.params.fields)
+  const inputNode = workflow.input_node as
+    | { params?: { fields?: Record<string, unknown> } }
+    | undefined;
+  const fields = inputNode?.params?.fields ?? {};
+  const inputs = Object.keys(fields);
+
   return {
     id,
     name: workflow.name as string,

@@ -25,13 +25,27 @@ export async function ensurePython(): Promise<string> {
     if (isAceteamNodesInstalled(venvPython)) {
       return venvPython;
     }
+
+    // Venv exists but aceteam-nodes missing — try to install
+    output.warn("aceteam-nodes is not installed.");
+    console.log("Installing aceteam-nodes...");
+    try {
+      await installAceteamNodes(venvPython);
+      output.success("aceteam-nodes installed");
+      return venvPython;
+    } catch {
+      output.error(
+        "Failed to install aceteam-nodes. Try: ace init"
+      );
+      process.exit(1);
+    }
   }
 
   // Fallback to PATH detection
   const pythonPath = await findPython();
   if (!pythonPath) {
     output.error(
-      "Python 3.12+ not found. Please install Python and run: ace init"
+      "Python 3.12+ not found. Run: ace init"
     );
     process.exit(1);
   }
@@ -40,11 +54,11 @@ export async function ensurePython(): Promise<string> {
     output.warn("aceteam-nodes is not installed.");
     console.log("Installing aceteam-nodes...");
     try {
-      installAceteamNodes(pythonPath);
+      await installAceteamNodes(pythonPath);
       output.success("aceteam-nodes installed");
     } catch {
       output.error(
-        "Failed to install aceteam-nodes. Try: pip install aceteam-nodes"
+        "Failed to install aceteam-nodes. Run: ace init"
       );
       process.exit(1);
     }

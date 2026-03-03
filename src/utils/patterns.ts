@@ -90,53 +90,47 @@ export function patternToWorkflow(
 ): Record<string, unknown> {
   const config = loadConfig();
   const model = modelOverride || pattern.model || config.default_model || "gpt-4o-mini";
-  const temperature = String(pattern.temperature ?? 0.7);
-
   return {
-    name: pattern.name,
-    description: pattern.description,
-    nodes: [
+    input_node: {
+      id: "input",
+      type: "Input",
+      params: {
+        fields: {
+          prompt: { type: "string" },
+        },
+      },
+    },
+    output_node: {
+      id: "output",
+      type: "Output",
+      params: {
+        fields: {
+          response: { type: "string" },
+        },
+      },
+    },
+    inner_nodes: [
       {
         id: "llm",
         type: "LLM",
         params: {
           model,
           system_prompt: pattern.systemPrompt,
-          temperature,
-          max_tokens: "4096",
         },
-        position: { x: 400, y: 200 },
       },
     ],
-    edges: [],
-    input_edges: [
+    edges: [
       {
-        input_key: "prompt",
+        source_id: "input",
+        source_key: "prompt",
         target_id: "llm",
         target_key: "prompt",
       },
-    ],
-    output_edges: [
       {
         source_id: "llm",
         source_key: "response",
-        output_key: "response",
-      },
-    ],
-    inputs: [
-      {
-        name: "prompt",
-        type: "LONG_TEXT",
-        display_name: "Prompt",
-        description: "The text to process",
-      },
-    ],
-    outputs: [
-      {
-        name: "response",
-        type: "LONG_TEXT",
-        display_name: "Response",
-        description: "The processed output",
+        target_id: "output",
+        target_key: "response",
       },
     ],
   };

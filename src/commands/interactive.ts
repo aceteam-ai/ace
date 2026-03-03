@@ -334,7 +334,9 @@ async function handleCreateWorkflow(): Promise<void> {
   }
 
   const workflow = structuredClone(template.workflow);
-  const nodes = workflow.nodes as Array<{
+  const nodes = ((workflow as Record<string, unknown>).inner_nodes ||
+    (workflow as Record<string, unknown>).nodes ||
+    []) as Array<{
     id: string;
     type: string;
     params: Record<string, string>;

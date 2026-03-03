@@ -78,7 +78,10 @@ export async function validateNodeTypes(
 ): Promise<{ invalid: string[]; available: string[] }> {
   const workflow = JSON.parse(readFileSync(workflowPath, "utf-8"));
 
-  const nodes = workflow.nodes as Array<{ type: string }> | undefined;
+  // Support both v2 (inner_nodes) and v1 (nodes) schema
+  const innerNodes = workflow.inner_nodes as Array<{ type: string }> | undefined;
+  const legacyNodes = workflow.nodes as Array<{ type: string }> | undefined;
+  const nodes = innerNodes || legacyNodes;
   if (!nodes || !Array.isArray(nodes)) {
     return { invalid: [], available: [] };
   }

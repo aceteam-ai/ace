@@ -9,6 +9,7 @@ import ora from "ora";
 import { getConfigPath, loadConfig, saveConfig } from "../utils/config.js";
 import {
   findPython,
+  findUv,
   getPythonVersion,
   createVenv,
   getVenvPythonPath,
@@ -25,12 +26,15 @@ const DEFAULT_VENV_DIR = join(homedir(), ".ace", "venv");
 // ── Exported setup functions (reusable by TUI) ──────────────
 
 export async function setupPython(): Promise<{
-  pythonPath: string;
+  pythonPath: string | null;
   version: string;
+  hasUv: boolean;
 }> {
+  const uvPath = await findUv();
   const systemPython = await findPython();
 
-  if (!systemPython) {
+  if (!systemPython && !uvPath) {
+    // Try to find any Python to give a better error
     const candidates = ["python3", "python"];
     for (const name of candidates) {
       try {
@@ -41,7 +45,7 @@ export async function setupPython(): Promise<{
         const match = ver.match(/Python (\d+\.\d+)/);
         if (match) {
           throw new Error(
-            `Found ${ver} at ${name}. Python 3.12+ required.`
+            `Found ${ver} at ${name}. Python 3.12+ required (or install uv: https://docs.astral.sh/uv/).`
           );
         }
       } catch (err) {
@@ -51,33 +55,39 @@ export async function setupPython(): Promise<{
       }
     }
     throw new Error(
-      "Python not found. Please install Python 3.12 or later."
+      "Neither Python 3.12+ nor uv found.\n" +
+        "  Install uv (recommended): curl -LsSf https://astral.sh/uv/install.sh | sh\n" +
+        "  Or install Python 3.12+:  https://www.python.org/downloads/"
     );
   }
 
-  const version = getPythonVersion(systemPython);
-  const versionStr = version
-    ? `${version.major}.${version.minor}.${version.patch}`
-    : "unknown";
+  if (systemPython) {
+    const version = getPythonVersion(systemPython);
+    const versionStr = version
+      ? `${version.major}.${version.minor}.${version.patch}`
+      : "unknown";
+    return { pythonPath: systemPython, version: versionStr, hasUv: !!uvPath };
+  }
 
-  return { pythonPath: systemPython, version: versionStr };
+  // uv available but no system Python — uv will provision Python
+  return { pythonPath: null, version: "managed by uv", hasUv: true };
 }
 
-export function setupVenv(
-  systemPython: string,
+export async function setupVenv(
+  systemPython: string | null,
   venvDir: string = DEFAULT_VENV_DIR
-): { venvDir: string; venvPython: string } {
+): Promise<{ venvDir: string; venvPython: string }> {
   if (isVenvValid(venvDir)) {
     return { venvDir, venvPython: getVenvPythonPath(venvDir) };
   }
 
-  createVenv(systemPython, venvDir);
+  await createVenv(systemPython, venvDir);
   return { venvDir, venvPython: getVenvPythonPath(venvDir) };
 }
 
-export function installDeps(venvPython: string): void {
+export async function installDeps(venvPython: string): Promise<void> {
   if (!isAceteamNodesInstalled(venvPython)) {
-    installAceteamNodes(venvPython);
+    await installAceteamNodes(venvPython);
   }
 }
 
@@ -91,16 +101,26 @@ export const initCommand = new Command("init")
 
     console.log(chalk.bold("\nAceTeam CLI Setup\n"));
 
-    // Step 1: Prerequisites — detect Python
+    // Step 1: Prerequisites — detect toolchain
     console.log(chalk.bold("1. Prerequisites"));
-    let systemPython: string;
+    let systemPython: string | null;
     let versionStr: string;
+    let hasUv: boolean;
 
     try {
       const result = await setupPython();
       systemPython = result.pythonPath;
       versionStr = result.version;
-      output.success(`Python ${versionStr} (${systemPython})`);
+      hasUv = result.hasUv;
+
+      if (hasUv) {
+        output.success(`uv detected (fast package manager)`);
+      }
+      if (systemPython) {
+        output.success(`Python ${versionStr} (${systemPython})`);
+      } else {
+        output.info(`Python will be provisioned by uv`);
+      }
     } catch (err) {
       output.error(err instanceof Error ? err.message : String(err));
       rl.close();
@@ -121,7 +141,7 @@ export const initCommand = new Command("init")
     } else {
       const spinner = ora(`Creating venv at ${venvDir}...`).start();
       try {
-        createVenv(systemPython, venvDir);
+        await createVenv(systemPython, venvDir);
         const venvPython = getVenvPythonPath(venvDir);
         config.venv_dir = venvDir;
         config.python_path = venvPython;
@@ -142,13 +162,20 @@ export const initCommand = new Command("init")
     if (isAceteamNodesInstalled(venvPython)) {
       output.success("aceteam-nodes is installed");
     } else {
-      const spinner = ora("Installing aceteam-nodes...").start();
+      const method = hasUv ? "uv" : "pip";
+      const spinner = ora(
+        `Installing aceteam-nodes via ${method}...`
+      ).start();
       try {
-        installAceteamNodes(venvPython);
+        await installAceteamNodes(venvPython);
         spinner.succeed("aceteam-nodes installed");
       } catch {
         spinner.fail("Failed to install aceteam-nodes");
-        output.error("Try manually: pip install aceteam-nodes");
+        if (hasUv) {
+          output.error("Try manually: uv pip install aceteam-nodes");
+        } else {
+          output.error("Try manually: pip install aceteam-nodes");
+        }
         rl.close();
         process.exit(1);
       }

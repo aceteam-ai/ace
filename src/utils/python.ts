@@ -3,6 +3,19 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import which from "which";
 
+// ── Toolchain detection ─────────────────────────────────────
+
+/**
+ * Find `uv` in PATH. Returns resolved path or null.
+ */
+export async function findUv(): Promise<string | null> {
+  try {
+    return await which("uv");
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Find a working Python 3.12+ executable.
  */
@@ -52,10 +65,37 @@ export function getPythonVersion(pythonPath: string): PythonVersion | null {
   return null;
 }
 
+// ── Venv management ─────────────────────────────────────────
+
 /**
- * Create a Python virtual environment.
+ * Create a virtual environment.
+ * Prefers `uv venv` (works even without system Python).
+ * Falls back to `python -m venv`.
  */
-export function createVenv(pythonPath: string, venvDir: string): void {
+export async function createVenv(
+  pythonPath: string | null,
+  venvDir: string
+): Promise<void> {
+  const uvPath = await findUv();
+
+  if (uvPath) {
+    // uv venv can provision Python itself if needed
+    const args = ["venv", venvDir];
+    if (pythonPath) {
+      args.push("--python", pythonPath);
+    } else {
+      args.push("--python", "3.12");
+    }
+    execFileSync(uvPath, args, { stdio: "pipe" });
+    return;
+  }
+
+  if (!pythonPath) {
+    throw new Error(
+      "No Python found and uv is not installed. Install uv (https://docs.astral.sh/uv/) or Python 3.12+."
+    );
+  }
+
   execFileSync(pythonPath, ["-m", "venv", venvDir], { stdio: "pipe" });
 }
 
@@ -77,6 +117,8 @@ export function isVenvValid(venvDir: string): boolean {
   return existsSync(pythonPath);
 }
 
+// ── Package management ──────────────────────────────────────
+
 /**
  * Check if aceteam-nodes is installed and importable.
  */
@@ -92,13 +134,31 @@ export function isAceteamNodesInstalled(pythonPath: string): boolean {
 }
 
 /**
- * Install aceteam-nodes via pip.
+ * Install aceteam-nodes.
+ * Prefers `uv pip install` (works without pip in the venv).
+ * Falls back to `python -m pip install`.
  */
-export function installAceteamNodes(pythonPath: string): void {
+export async function installAceteamNodes(
+  pythonPath: string
+): Promise<void> {
+  const uvPath = await findUv();
+
+  if (uvPath) {
+    execFileSync(
+      uvPath,
+      ["pip", "install", "aceteam-nodes", "--python", pythonPath],
+      { stdio: ["ignore", "inherit", "inherit"] }
+    );
+    return;
+  }
+
+  // Fallback: try pip via the venv Python
   execFileSync(pythonPath, ["-m", "pip", "install", "aceteam-nodes"], {
-    stdio: "inherit",
+    stdio: ["ignore", "inherit", "inherit"],
   });
 }
+
+// ── Workflow execution ──────────────────────────────────────
 
 export interface RunResult {
   success: boolean;
