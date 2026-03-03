@@ -16,9 +16,72 @@ import {
   installAceteamNodes,
   isAceteamNodesInstalled,
 } from "../utils/python.js";
+import { detectProvider, providerLabel } from "../utils/provider-detect.js";
+import { DEMOS } from "../demos/index.js";
 import * as output from "../utils/output.js";
 
 const DEFAULT_VENV_DIR = join(homedir(), ".ace", "venv");
+
+// ── Exported setup functions (reusable by TUI) ──────────────
+
+export async function setupPython(): Promise<{
+  pythonPath: string;
+  version: string;
+}> {
+  const systemPython = await findPython();
+
+  if (!systemPython) {
+    const candidates = ["python3", "python"];
+    for (const name of candidates) {
+      try {
+        const { execFileSync } = await import("node:child_process");
+        const ver = execFileSync(name, ["--version"], {
+          encoding: "utf-8",
+        }).trim();
+        const match = ver.match(/Python (\d+\.\d+)/);
+        if (match) {
+          throw new Error(
+            `Found ${ver} at ${name}. Python 3.12+ required.`
+          );
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("Python 3.12+")) {
+          throw err;
+        }
+      }
+    }
+    throw new Error(
+      "Python not found. Please install Python 3.12 or later."
+    );
+  }
+
+  const version = getPythonVersion(systemPython);
+  const versionStr = version
+    ? `${version.major}.${version.minor}.${version.patch}`
+    : "unknown";
+
+  return { pythonPath: systemPython, version: versionStr };
+}
+
+export function setupVenv(
+  systemPython: string,
+  venvDir: string = DEFAULT_VENV_DIR
+): { venvDir: string; venvPython: string } {
+  if (isVenvValid(venvDir)) {
+    return { venvDir, venvPython: getVenvPythonPath(venvDir) };
+  }
+
+  createVenv(systemPython, venvDir);
+  return { venvDir, venvPython: getVenvPythonPath(venvDir) };
+}
+
+export function installDeps(venvPython: string): void {
+  if (!isAceteamNodesInstalled(venvPython)) {
+    installAceteamNodes(venvPython);
+  }
+}
+
+// ── Init command ─────────────────────────────────────────────
 
 export const initCommand = new Command("init")
   .description("Initialize AceTeam CLI configuration")
@@ -30,42 +93,19 @@ export const initCommand = new Command("init")
 
     // Step 1: Prerequisites — detect Python
     console.log(chalk.bold("1. Prerequisites"));
-    const systemPython = await findPython();
+    let systemPython: string;
+    let versionStr: string;
 
-    if (!systemPython) {
-      // Try to find any Python to give a better error
-      const candidates = ["python3", "python"];
-      for (const name of candidates) {
-        try {
-          const { execFileSync } = await import("node:child_process");
-          const version = execFileSync(name, ["--version"], {
-            encoding: "utf-8",
-          }).trim();
-          const match = version.match(/Python (\d+\.\d+)/);
-          if (match) {
-            output.error(
-              `Found ${version} at ${name}. Python 3.12+ required.`
-            );
-            rl.close();
-            process.exit(1);
-          }
-        } catch {
-          // Not found
-        }
-      }
-
-      output.error(
-        "Python not found. Please install Python 3.12 or later."
-      );
+    try {
+      const result = await setupPython();
+      systemPython = result.pythonPath;
+      versionStr = result.version;
+      output.success(`Python ${versionStr} (${systemPython})`);
+    } catch (err) {
+      output.error(err instanceof Error ? err.message : String(err));
       rl.close();
       process.exit(1);
     }
-
-    const version = getPythonVersion(systemPython);
-    const versionStr = version
-      ? `${version.major}.${version.minor}.${version.patch}`
-      : "unknown";
-    output.success(`Python ${versionStr} (${systemPython})`);
 
     // Step 2: Venv setup
     console.log(chalk.bold("\n2. Virtual environment"));
@@ -132,34 +172,128 @@ export const initCommand = new Command("init")
       mkdirSync(patternsDir, { recursive: true });
     }
 
-    // Step 5: Summary
-    console.log(chalk.bold("\nSetup complete:"));
-    console.log(
-      `  ${chalk.green("✓")} Python ${versionStr} (${config.python_path})`
-    );
-    console.log(`  ${chalk.green("✓")} aceteam-nodes installed`);
-    console.log(`  ${chalk.green("✓")} Config: ${configPath}`);
-    console.log(`  ${chalk.green("✓")} Model: ${config.default_model}`);
+    // Step 5: Provider detection & tiered on-ramp
+    console.log(chalk.bold("\n5. LLM Provider"));
 
-    // LLM provider reminder
+    const provider = await detectProvider();
+
+    if (provider.provider === "aceteam") {
+      output.success(
+        `Connected to AceTeam Fabric — full node support available`
+      );
+      console.log(chalk.dim(`  ${providerLabel(provider)}`));
+    } else if (
+      provider.provider === "openai" ||
+      provider.provider === "anthropic"
+    ) {
+      output.success(`Using ${providerLabel(provider)}`);
+    } else if (provider.provider === "ollama") {
+      output.success(`Ollama detected — ${provider.model}`);
+    } else {
+      output.warn("No LLM provider detected");
+      console.log(
+        "\n" +
+          chalk.bold("  Set up a provider to run patterns live:") +
+          "\n" +
+          "\n" +
+          `  ${chalk.cyan("Tier 1 — Free / Local")}` +
+          "\n" +
+          `  ${chalk.dim("ollama serve && ollama pull llama3")}` +
+          "\n" +
+          "\n" +
+          `  ${chalk.cyan("Tier 2 — Bring Your Own Key")}` +
+          "\n" +
+          `  ${chalk.dim("export OPENAI_API_KEY=sk-...")}` +
+          "\n" +
+          `  ${chalk.dim("export ANTHROPIC_API_KEY=sk-ant-...")}` +
+          "\n" +
+          "\n" +
+          `  ${chalk.cyan("Tier 3 — AceTeam Platform")}` +
+          "\n" +
+          `  ${chalk.dim("ace fabric login    # Full node support + remote execution")}`
+      );
+    }
+
+    // Done — offer demo
+    console.log(chalk.bold("\n\nSetup complete.\n"));
+    const wantDemo = await rl.question(
+      chalk.bold("Want to try a quick demo? ") + chalk.dim("(Y/n) ")
+    );
+
+    if (wantDemo.trim().toLowerCase() !== "n") {
+      if (provider.provider) {
+        // Live demo
+        console.log();
+        output.info(
+          `Running: ${chalk.cyan('ace run explain "What is quantum computing?"')}`
+        );
+        console.log();
+
+        try {
+          const { ensurePython } = await import("../utils/ensure-python.js");
+          const { loadPattern, runPattern } = await import(
+            "../utils/patterns.js"
+          );
+          const pythonPath = await ensurePython();
+          const pattern = loadPattern("explain");
+
+          if (pattern) {
+            const spinner = ora("Running explain pattern...").start();
+            const result = await runPattern(
+              pythonPath,
+              pattern,
+              "What is quantum computing?",
+              { model: provider.model }
+            );
+            spinner.succeed("Done!");
+            console.log();
+            console.log(result);
+          }
+        } catch (err) {
+          output.warn(
+            `Live demo failed: ${err instanceof Error ? err.message : String(err)}`
+          );
+          showCannedDemo();
+        }
+      } else {
+        // Canned demo
+        showCannedDemo();
+      }
+    }
+
     console.log(
       "\n" +
-        chalk.bold("LLM Provider:") +
-        "\n  Cloud — set an API key:" +
-        "\n  " +
-        chalk.dim("export OPENAI_API_KEY=sk-...") +
-        "\n  " +
-        chalk.dim("export ANTHROPIC_API_KEY=sk-ant-...") +
+        chalk.dim("─".repeat(50)) +
         "\n" +
-        "\n  Local — use Ollama or any OpenAI-compatible server:" +
-        "\n  " +
-        chalk.dim("ollama serve && ollama pull llama3") +
-        "\n  " +
-        chalk.dim("# then set model to ollama/llama3 in your workflow") +
+        chalk.bold("Next steps:") +
+        "\n" +
+        `  ${chalk.cyan("ace run --list")}        List available patterns` +
+        "\n" +
+        `  ${chalk.cyan("ace run summarize")}     Run a pattern on text` +
+        "\n" +
+        `  ${chalk.cyan("ace")}                   Launch interactive mode` +
         "\n"
     );
 
-    console.log(chalk.dim("Try: ace run --list"));
-
     rl.close();
   });
+
+function showCannedDemo(): void {
+  const demo = DEMOS["explain"];
+  if (!demo) return;
+
+  console.log();
+  console.log(
+    chalk.dim("  Here's what ") +
+      chalk.cyan("ace run explain") +
+      chalk.dim(" produces:")
+  );
+  console.log(chalk.dim("  Input: ") + chalk.white(`"${demo.input}"`));
+  console.log();
+
+  // Indent demo output
+  const lines = demo.output.split("\n");
+  for (const line of lines) {
+    console.log(`  ${line}`);
+  }
+}

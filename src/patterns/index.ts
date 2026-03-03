@@ -283,7 +283,6 @@ Your output MUST follow this format:
 
 Keep the briefing under 500 words. Use plain language — avoid jargon. Highlight numbers and deadlines prominently.`,
   },
-];
 
   // ── Law Enforcement ────────────────────────────────────
   {
@@ -328,6 +327,7 @@ Guidelines:
 - Ontario Criminal Code references must be accurate or flagged`,
     temperature: 0.2,
   },
+];
 
 export function getPatternById(id: string): PatternDef | undefined {
   return BUILTIN_PATTERNS.find((p) => p.id === id);

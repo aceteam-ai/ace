@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import { BUILTIN_PATTERNS, getPatternById } from "../../src/patterns/index.js";
 
 describe("BUILTIN_PATTERNS", () => {
-  it("has 10 built-in patterns", () => {
-    expect(BUILTIN_PATTERNS).toHaveLength(10);
+  it("has 11 built-in patterns", () => {
+    expect(BUILTIN_PATTERNS).toHaveLength(11);
   });
 
   it("has unique IDs", () => {
@@ -11,11 +11,11 @@ describe("BUILTIN_PATTERNS", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("has 7 general and 3 government patterns", () => {
+  it("has 7 general and 4 government patterns", () => {
     const general = BUILTIN_PATTERNS.filter((p) => p.category === "general");
     const gov = BUILTIN_PATTERNS.filter((p) => p.category === "government");
     expect(general).toHaveLength(7);
-    expect(gov).toHaveLength(3);
+    expect(gov).toHaveLength(4);
   });
 
   it("every pattern has required fields", () => {

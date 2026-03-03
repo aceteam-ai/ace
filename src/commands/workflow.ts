@@ -12,6 +12,7 @@ import {
 import { loadConfig } from "../utils/config.js";
 import { FabricClient } from "../utils/fabric.js";
 import { classifyPythonError } from "../utils/errors.js";
+import { validateNodeTypes } from "../utils/node-cache.js";
 import { TEMPLATES, getTemplateById } from "../templates/index.js";
 import * as output from "../utils/output.js";
 import { ensurePython } from "../utils/ensure-python.js";
@@ -124,6 +125,26 @@ workflowCommand
       // Local execution via Python
       const pythonPath = await ensurePython();
 
+      // Pre-validate node types before running
+      const { invalid, available } = await validateNodeTypes(
+        pythonPath,
+        file
+      );
+      if (invalid.length > 0) {
+        output.error(
+          `Unknown node type${invalid.length > 1 ? "s" : ""}: ${invalid.join(", ")}`
+        );
+        if (available.length > 0) {
+          console.log(
+            chalk.dim(`  Available: ${available.join(", ")}`)
+          );
+        }
+        console.log(
+          chalk.dim("  Run 'ace workflow list-nodes' for all available types")
+        );
+        process.exit(1);
+      }
+
       const spinner = ora("Running workflow...").start();
 
       try {
@@ -221,6 +242,28 @@ workflowCommand
     const result = await validateWorkflow(pythonPath, file);
 
     if (result.valid) {
+      // Also check node types against the cache
+      const { invalid, available } = await validateNodeTypes(
+        pythonPath,
+        file
+      );
+      if (invalid.length > 0) {
+        output.warn(
+          `Unknown node type${invalid.length > 1 ? "s" : ""}: ${invalid.join(", ")}`
+        );
+        if (available.length > 0) {
+          console.log(
+            chalk.dim(`  Available: ${available.join(", ")}`)
+          );
+        }
+        console.log(
+          chalk.dim(
+            "  Run 'ace workflow list-nodes' for all available types"
+          )
+        );
+        process.exit(1);
+      }
+
       output.success("Valid workflow");
       console.log(
         `  Nodes: ${result.nodes}, Inputs: ${JSON.stringify(result.inputs)}, Outputs: ${JSON.stringify(result.outputs)}`
