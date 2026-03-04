@@ -17,6 +17,9 @@ vi.mock("../../src/utils/python.js", () => ({
 
 vi.mock("../../src/utils/errors.js", () => ({
   classifyPythonError: vi.fn((msg: string) => ({ message: msg })),
+  classifyWorkflowError: vi.fn((result: { error?: string }) => ({
+    message: result.error || "Unknown error",
+  })),
 }));
 
 vi.mock("ora", () => ({
@@ -47,6 +50,16 @@ vi.mock("../../src/utils/config.js", () => ({
   loadConfig: vi.fn(() => ({ default_model: "gpt-4o-mini" })),
 }));
 
+vi.mock("../../src/utils/fabric.js", () => ({
+  FabricClient: vi.fn(),
+}));
+
+vi.mock("../../src/utils/node-cache.js", () => ({
+  validateNodeTypes: vi.fn(() =>
+    Promise.resolve({ invalid: [], available: [] })
+  ),
+}));
+
 import { runCommand } from "../../src/commands/run.js";
 
 describe("runCommand", () => {
@@ -70,11 +83,15 @@ describe("runCommand", () => {
     expect(optionNames).toContain("--input-dir");
     expect(optionNames).toContain("--output");
     expect(optionNames).toContain("--output-dir");
+    expect(optionNames).toContain("--input");
+    expect(optionNames).toContain("--config");
+    expect(optionNames).toContain("--remote");
   });
 
-  it("uses ensurePython for workflow execution", () => {
+  it("describes both tasks and workflows", () => {
     const commandStr = runCommand.description();
     expect(commandStr).toBeDefined();
-    expect(commandStr).toContain("pattern");
+    expect(commandStr).toContain("task");
+    expect(commandStr).toContain("workflow");
   });
 });

@@ -15,7 +15,7 @@ import {
   providerLabel,
   type ProviderInfo,
 } from "../utils/provider-detect.js";
-import { classifyPythonError } from "../utils/errors.js";
+import { classifyPythonError, classifyWorkflowError } from "../utils/errors.js";
 import { TEMPLATES, getTemplateById } from "../templates/index.js";
 import { DEMOS } from "../demos/index.js";
 import * as output from "../utils/output.js";
@@ -42,9 +42,13 @@ export async function startInteractive(): Promise<void> {
     output.warn("Not initialized. Running setup first...\n");
     const { initCommand } = await import("./init.js");
     await initCommand.parseAsync(["node", "ace", "init"]);
-    // Re-enter interactive after init completes
-    await mainLoop();
-    return;
+  }
+
+  // If no provider configured, prompt login before showing menu
+  if (!provider.provider) {
+    console.log(chalk.bold("  Welcome! Let's get you connected to an LLM.\n"));
+    const { runLoginFlow } = await import("./login.js");
+    await runLoginFlow();
   }
 
   await mainLoop();
@@ -56,15 +60,11 @@ async function mainLoop(): Promise<void> {
     const action = await select({
       message: "What would you like to do?",
       choices: [
-        { name: "Run a pattern", value: "run-pattern" },
-        { name: "Run a workflow file", value: "run-workflow" },
+        { name: "Run a task", value: "run-pattern" },
+        { name: "Run a workflow (JSON)", value: "run-workflow" },
         { name: "Create a workflow from template", value: "create-workflow" },
         { name: "View / edit settings", value: "config" },
-        {
-          name: "Connect to AceTeam platform",
-          value: "fabric",
-          description: "Remote execution & full node support",
-        },
+        { name: "Log in / change provider", value: "login" },
         new Separator(),
         { name: "Exit", value: "exit" },
       ],
@@ -83,9 +83,11 @@ async function mainLoop(): Promise<void> {
       case "config":
         await handleConfig();
         break;
-      case "fabric":
-        await handleFabric();
+      case "login": {
+        const { runLoginFlow } = await import("./login.js");
+        await runLoginFlow();
         break;
+      }
       case "exit":
         return;
     }
@@ -130,7 +132,7 @@ async function handleRunPattern(): Promise<void> {
 
   while (true) {
     const patternId = await select({
-      message: "Choose a pattern:",
+      message: "Choose a task:",
       choices,
       pageSize: 15,
     });
@@ -149,7 +151,7 @@ async function handleRunPattern(): Promise<void> {
         console.log(demo.output);
       } else {
         output.error(
-          "No LLM provider configured. Set an API key or start Ollama to run patterns."
+          "No LLM provider configured. Set an API key or start Ollama to run tasks."
         );
         console.log(chalk.dim("\n  export OPENAI_API_KEY=sk-..."));
         console.log(chalk.dim("  export ANTHROPIC_API_KEY=sk-ant-..."));
@@ -206,7 +208,7 @@ async function handleRunPattern(): Promise<void> {
 
     // H3/H12: Loop instead of recursion — bounded stack, clean "back to menu"
     const again = await confirm({
-      message: "Run another pattern?",
+      message: "Run another task?",
       default: true,
     });
 
@@ -294,11 +296,7 @@ async function handleRunWorkflow(): Promise<void> {
       console.log(JSON.stringify(result.output, null, 2));
     } else {
       spinner.fail("Workflow failed");
-      // H9: Classify error for actionable message
-      const rawError =
-        result.error ||
-        (result.errors ? JSON.stringify(result.errors) : "Unknown error");
-      const classified = classifyPythonError(rawError);
+      const classified = classifyWorkflowError(result);
       console.error(chalk.red(classified.message));
       if (classified.suggestion) {
         console.error(chalk.dim(classified.suggestion));
@@ -395,7 +393,7 @@ async function handleCreateWorkflow(): Promise<void> {
     .map((name) => `${name}='...'`)
     .join(" --input ");
   console.log(
-    chalk.dim(`\nRun: ace workflow run ${outputPath} --input ${inputArgs}`)
+    chalk.dim(`\nRun: ace run ${outputPath} --input ${inputArgs}`)
   );
 }
 
@@ -428,120 +426,3 @@ async function handleConfig(): Promise<void> {
   }
 }
 
-async function handleFabric(): Promise<void> {
-  const config = loadConfig();
-
-  if (config.fabric_url && config.fabric_api_key) {
-    output.success(`Connected to ${config.fabric_url}`);
-
-    const action = await select({
-      message: "What would you like to do?",
-      choices: [
-        { name: "Check node status", value: "status" },
-        { name: "Discover available nodes", value: "discover" },
-        { name: "Re-connect with new credentials", value: "login" },
-        { name: "Back", value: "back" },
-      ],
-    });
-
-    if (action === "back") return;
-
-    if (action === "login") {
-      await fabricLogin();
-      return;
-    }
-
-    const { FabricClient } = await import("../utils/fabric.js");
-    const client = new FabricClient(config.fabric_url, config.fabric_api_key);
-    const spinner = ora(
-      action === "status" ? "Fetching status..." : "Discovering nodes..."
-    ).start();
-
-    try {
-      const result =
-        action === "status"
-          ? await client.status()
-          : await client.discover();
-      spinner.stop();
-
-      const nodes = result as Array<Record<string, unknown>>;
-      if (!Array.isArray(nodes) || nodes.length === 0) {
-        output.warn("No nodes found");
-        return;
-      }
-
-      if (action === "status") {
-        output.printTable(
-          ["ID", "Name", "CPU %", "Memory %", "GPU %", "Score"],
-          nodes.map((n) => [
-            String(n.id || ""),
-            String(n.name || ""),
-            String(n.cpuPercent ?? n.cpu ?? ""),
-            String(n.memPercent ?? n.mem ?? ""),
-            String(n.gpuPercent ?? n.gpu ?? ""),
-            String(n.score ?? ""),
-          ])
-        );
-      } else {
-        output.printTable(
-          ["ID", "Name", "Status", "Capabilities"],
-          nodes.map((n) => [
-            String(n.id || ""),
-            String(n.name || ""),
-            String(n.status || ""),
-            Array.isArray(n.capabilities)
-              ? n.capabilities.join(", ")
-              : String(n.capabilities || ""),
-          ])
-        );
-      }
-    } catch (err) {
-      spinner.fail("Request failed");
-      output.error(String(err));
-    }
-  } else {
-    output.info(
-      "AceTeam platform gives you full node support and remote execution."
-    );
-    const login = await confirm({
-      message: "Connect now?",
-      default: true,
-    });
-    if (login) {
-      await fabricLogin();
-    }
-  }
-}
-
-async function fabricLogin(): Promise<void> {
-  const config = loadConfig();
-
-  const url = await input({
-    message: "AceTeam API URL:",
-    default: config.fabric_url || "https://app.aceteam.ai",
-  });
-
-  const apiKey = await input({
-    message: "API Key:",
-    validate: (value) => (value.trim() ? true : "API key is required"),
-  });
-
-  const { FabricClient } = await import("../utils/fabric.js");
-  const spinner = ora("Verifying connection...").start();
-
-  try {
-    const client = new FabricClient(url, apiKey.trim());
-    await client.status();
-    spinner.succeed("Connected to AceTeam platform");
-
-    config.fabric_url = url;
-    config.fabric_api_key = apiKey.trim();
-    const { saveConfig } = await import("../utils/config.js");
-    saveConfig(config);
-
-    output.success("Credentials saved");
-  } catch (err) {
-    spinner.fail("Connection failed");
-    output.error(String(err));
-  }
-}
