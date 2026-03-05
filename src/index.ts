@@ -15,7 +15,7 @@ if (process.argv.length === 2 && process.stdin.isTTY) {
   program
     .name("ace")
     .description("AceTeam CLI - Run AI workflows locally")
-    .version("0.2.0");
+    .version("0.3.0");
 
   program.addCommand(initCommand);
   program.addCommand(runCommand);
