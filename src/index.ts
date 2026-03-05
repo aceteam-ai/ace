@@ -3,6 +3,7 @@ import { initCommand } from "./commands/init.js";
 import { workflowCommand } from "./commands/workflow.js";
 import { fabricCommand } from "./commands/fabric.js";
 import { runCommand } from "./commands/run.js";
+import { loginCommand } from "./commands/login.js";
 
 // No args + TTY → interactive mode
 if (process.argv.length === 2 && process.stdin.isTTY) {
@@ -20,6 +21,7 @@ if (process.argv.length === 2 && process.stdin.isTTY) {
   program.addCommand(runCommand);
   program.addCommand(workflowCommand);
   program.addCommand(fabricCommand);
+  program.addCommand(loginCommand);
 
   program.parse();
 }

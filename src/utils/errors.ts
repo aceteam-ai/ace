@@ -1,6 +1,62 @@
+import type { RunResult } from "./python.js";
+
 export interface ClassifiedError {
   message: string;
   suggestion?: string;
+}
+
+/**
+ * Classify a RunResult into a human-readable error.
+ * Handles the common case where workflow_errors contains [null] but the
+ * actual error (e.g. AuthenticationError) is in stderr.
+ */
+export function classifyWorkflowError(result: RunResult): ClassifiedError {
+  // Direct error string from Python
+  if (result.error) {
+    return classifyPythonError(result.error);
+  }
+
+  // Check for non-null messages in node_errors
+  if (result.errors) {
+    const nodeErrors = (result.errors as Record<string, unknown>).node_errors as
+      | Record<string, string | null>
+      | undefined;
+    if (nodeErrors) {
+      const messages = Object.entries(nodeErrors)
+        .filter(([, v]) => v != null)
+        .map(([k, v]) => `${k}: ${v}`);
+      if (messages.length > 0) {
+        return { message: messages.join("\n") };
+      }
+    }
+
+    // workflow_errors has null values — the real error is in stderr
+    const workflowErrors = (result.errors as Record<string, unknown>)
+      .workflow_errors as Array<string | null> | undefined;
+    const hasOnlyNulls =
+      workflowErrors &&
+      workflowErrors.length > 0 &&
+      workflowErrors.every((e) => e == null);
+
+    if (hasOnlyNulls && result.stderr) {
+      return classifyPythonError(result.stderr);
+    }
+
+    // Non-null workflow errors
+    if (workflowErrors) {
+      const nonNull = workflowErrors.filter((e) => e != null);
+      if (nonNull.length > 0) {
+        return classifyPythonError(nonNull.join("\n"));
+      }
+    }
+  }
+
+  // Last resort: try stderr
+  if (result.stderr) {
+    return classifyPythonError(result.stderr);
+  }
+
+  return { message: "Unknown error occurred." };
 }
 
 /**

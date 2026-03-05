@@ -7,7 +7,7 @@ import chalk from "chalk";
 import { BUILTIN_PATTERNS, type PatternDef } from "../patterns/index.js";
 import { loadConfig } from "./config.js";
 import { runWorkflow, type RunResult } from "./python.js";
-import { classifyPythonError } from "./errors.js";
+import { classifyWorkflowError } from "./errors.js";
 import * as output from "./output.js";
 
 const USER_PATTERNS_DIR = join(homedir(), ".ace", "patterns");
@@ -37,7 +37,7 @@ function loadUserPattern(name: string): PatternDef | undefined {
   return {
     id: name,
     name: name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-    description: `User pattern: ${name}`,
+    description: `User task: ${name}`,
     category: "user",
     systemPrompt,
   };
@@ -222,10 +222,7 @@ export async function runPattern(
     );
 
     if (!result.success) {
-      const rawError =
-        result.error ||
-        (result.errors ? JSON.stringify(result.errors) : "Unknown error");
-      const classified = classifyPythonError(rawError);
+      const classified = classifyWorkflowError(result);
       throw new Error(classified.message + (classified.suggestion ? `\n${classified.suggestion}` : ""));
     }
 

@@ -23,16 +23,16 @@ export async function detectProvider(): Promise<ProviderInfo> {
     };
   }
 
-  // OpenAI
-  if (process.env.OPENAI_API_KEY) {
+  // OpenAI (env var or config)
+  if (process.env.OPENAI_API_KEY || config.api_keys?.openai) {
     return {
       provider: "openai",
       model: config.default_model || "gpt-4o-mini",
     };
   }
 
-  // Anthropic
-  if (process.env.ANTHROPIC_API_KEY) {
+  // Anthropic (env var or config)
+  if (process.env.ANTHROPIC_API_KEY || config.api_keys?.anthropic) {
     return {
       provider: "anthropic",
       model: "claude-sonnet-4-6",
@@ -51,7 +51,7 @@ export async function detectProvider(): Promise<ProviderInfo> {
   return { provider: null };
 }
 
-async function detectOllama(): Promise<string | null> {
+export async function detectOllama(): Promise<string | null> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1000);
