@@ -12,7 +12,7 @@ vi.mock("node:os", () => ({
 }));
 
 vi.mock("node:child_process", () => ({
-  execSync: vi.fn(),
+  execFileSync: vi.fn(),
   spawn: vi.fn(),
 }));
 
@@ -21,7 +21,7 @@ vi.mock("which", () => ({
 }));
 
 import { existsSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import which from "which";
 import {
   findPython,
@@ -33,7 +33,7 @@ import {
 import { loadConfig, saveConfig, getConfigPath } from "../../src/utils/config.js";
 
 const mockExistsSync = vi.mocked(existsSync);
-const mockExecSync = vi.mocked(execSync);
+const mockExecFileSync = vi.mocked(execFileSync);
 const mockWhich = vi.mocked(which);
 
 beforeEach(() => {
@@ -44,7 +44,7 @@ describe("init lifecycle", () => {
   describe("Python detection", () => {
     it("finds Python 3.12+ via which", async () => {
       mockWhich.mockResolvedValue("/usr/bin/python3" as never);
-      mockExecSync.mockReturnValue("Python 3.12.3\n");
+      mockExecFileSync.mockReturnValue("Python 3.12.3\n");
 
       const result = await findPython();
       expect(result).toBe("/usr/bin/python3");
@@ -52,7 +52,7 @@ describe("init lifecycle", () => {
 
     it("rejects Python < 3.12", async () => {
       mockWhich.mockResolvedValue("/usr/bin/python3" as never);
-      mockExecSync.mockReturnValue("Python 3.10.12\n");
+      mockExecFileSync.mockReturnValue("Python 3.10.12\n");
 
       const result = await findPython();
       expect(result).toBeNull();
@@ -68,19 +68,19 @@ describe("init lifecycle", () => {
 
   describe("getPythonVersion", () => {
     it("parses Python version string", () => {
-      mockExecSync.mockReturnValue("Python 3.12.3\n");
+      mockExecFileSync.mockReturnValue("Python 3.12.3\n");
       const version = getPythonVersion("/usr/bin/python3");
       expect(version).toEqual({ major: 3, minor: 12, patch: 3 });
     });
 
     it("returns null for invalid output", () => {
-      mockExecSync.mockReturnValue("Not Python\n");
+      mockExecFileSync.mockReturnValue("Not Python\n");
       const version = getPythonVersion("/usr/bin/python3");
       expect(version).toBeNull();
     });
 
     it("returns null when exec fails", () => {
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw new Error("not found");
       });
       const version = getPythonVersion("/usr/bin/python3");
@@ -110,12 +110,12 @@ describe("init lifecycle", () => {
 
   describe("aceteam-nodes detection", () => {
     it("returns true when import succeeds", () => {
-      mockExecSync.mockReturnValue("");
+      mockExecFileSync.mockReturnValue("");
       expect(isAceteamNodesInstalled("/usr/bin/python3")).toBe(true);
     });
 
     it("returns false when import fails", () => {
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         throw new Error("ModuleNotFoundError");
       });
       expect(isAceteamNodesInstalled("/usr/bin/python3")).toBe(false);

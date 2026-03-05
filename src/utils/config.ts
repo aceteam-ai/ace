@@ -12,6 +12,7 @@ export interface AceConfig {
   fabric_api_key?: string;
   python_path?: string;
   venv_dir?: string;
+  patterns_dir?: string;
 }
 
 export function getConfigPath(): string {

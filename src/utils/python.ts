@@ -1,7 +1,20 @@
-import { execSync, spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import which from "which";
+
+// ── Toolchain detection ─────────────────────────────────────
+
+/**
+ * Find `uv` in PATH. Returns resolved path or null.
+ */
+export async function findUv(): Promise<string | null> {
+  try {
+    return await which("uv");
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Find a working Python 3.12+ executable.
@@ -35,7 +48,7 @@ export interface PythonVersion {
  */
 export function getPythonVersion(pythonPath: string): PythonVersion | null {
   try {
-    const output = execSync(`${pythonPath} --version`, {
+    const output = execFileSync(pythonPath, ["--version"], {
       encoding: "utf-8",
     }).trim();
     const match = output.match(/Python (\d+)\.(\d+)\.(\d+)/);
@@ -52,11 +65,38 @@ export function getPythonVersion(pythonPath: string): PythonVersion | null {
   return null;
 }
 
+// ── Venv management ─────────────────────────────────────────
+
 /**
- * Create a Python virtual environment.
+ * Create a virtual environment.
+ * Prefers `uv venv` (works even without system Python).
+ * Falls back to `python -m venv`.
  */
-export function createVenv(pythonPath: string, venvDir: string): void {
-  execSync(`${pythonPath} -m venv ${venvDir}`, { stdio: "pipe" });
+export async function createVenv(
+  pythonPath: string | null,
+  venvDir: string
+): Promise<void> {
+  const uvPath = await findUv();
+
+  if (uvPath) {
+    // uv venv can provision Python itself if needed
+    const args = ["venv", venvDir];
+    if (pythonPath) {
+      args.push("--python", pythonPath);
+    } else {
+      args.push("--python", "3.12");
+    }
+    execFileSync(uvPath, args, { stdio: "pipe" });
+    return;
+  }
+
+  if (!pythonPath) {
+    throw new Error(
+      "No Python found and uv is not installed. Install uv (https://docs.astral.sh/uv/) or Python 3.12+."
+    );
+  }
+
+  execFileSync(pythonPath, ["-m", "venv", venvDir], { stdio: "pipe" });
 }
 
 /**
@@ -77,12 +117,14 @@ export function isVenvValid(venvDir: string): boolean {
   return existsSync(pythonPath);
 }
 
+// ── Package management ──────────────────────────────────────
+
 /**
  * Check if aceteam-nodes is installed and importable.
  */
 export function isAceteamNodesInstalled(pythonPath: string): boolean {
   try {
-    execSync(`${pythonPath} -c "import aceteam_nodes"`, {
+    execFileSync(pythonPath, ["-c", "import aceteam_nodes"], {
       stdio: "pipe",
     });
     return true;
@@ -92,19 +134,38 @@ export function isAceteamNodesInstalled(pythonPath: string): boolean {
 }
 
 /**
- * Install aceteam-nodes via pip.
+ * Install aceteam-nodes.
+ * Prefers `uv pip install` (works without pip in the venv).
+ * Falls back to `python -m pip install`.
  */
-export function installAceteamNodes(pythonPath: string): void {
-  execSync(`${pythonPath} -m pip install aceteam-nodes`, {
-    stdio: "inherit",
+export async function installAceteamNodes(
+  pythonPath: string
+): Promise<void> {
+  const uvPath = await findUv();
+
+  if (uvPath) {
+    execFileSync(
+      uvPath,
+      ["pip", "install", "aceteam-nodes[llm]", "--python", pythonPath],
+      { stdio: ["ignore", "inherit", "inherit"] }
+    );
+    return;
+  }
+
+  // Fallback: try pip via the venv Python
+  execFileSync(pythonPath, ["-m", "pip", "install", "aceteam-nodes[llm]"], {
+    stdio: ["ignore", "inherit", "inherit"],
   });
 }
+
+// ── Workflow execution ──────────────────────────────────────
 
 export interface RunResult {
   success: boolean;
   output?: Record<string, unknown>;
   errors?: Record<string, unknown>;
   error?: string;
+  stderr?: string;
 }
 
 export interface ProgressEvent {
@@ -243,28 +304,33 @@ export function runWorkflow(
         // Try parsing stdout as JSON first
         if (stdout.trim()) {
           const result = JSON.parse(stdout) as RunResult;
+          result.stderr = stderr;
           resolve(result);
         } else if (stderr.trim()) {
           // Try parsing stderr (error case)
           try {
             const result = JSON.parse(stderr) as RunResult;
+            result.stderr = stderr;
             resolve(result);
           } catch {
             resolve({
               success: false,
               error: stderr.trim(),
+              stderr,
             });
           }
         } else {
           resolve({
             success: false,
             error: `Process exited with code ${code}`,
+            stderr,
           });
         }
       } catch {
         resolve({
           success: false,
           error: stdout || stderr || `Process exited with code ${code}`,
+          stderr,
         });
       }
     });

@@ -3,234 +3,17 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import chalk from "chalk";
-import ora from "ora";
 import {
-  findPython,
-  isAceteamNodesInstalled,
-  installAceteamNodes,
-  runWorkflow,
   validateWorkflow,
   listNodes,
-  getVenvPythonPath,
-  isVenvValid,
 } from "../utils/python.js";
-import { loadConfig } from "../utils/config.js";
-import { FabricClient } from "../utils/fabric.js";
-import { classifyPythonError } from "../utils/errors.js";
+import { validateNodeTypes } from "../utils/node-cache.js";
 import { TEMPLATES, getTemplateById } from "../templates/index.js";
 import * as output from "../utils/output.js";
-
-async function ensurePython(): Promise<string> {
-  const config = loadConfig();
-
-  // Check config python_path first (managed venv)
-  if (config.python_path && existsSync(config.python_path)) {
-    if (isAceteamNodesInstalled(config.python_path)) {
-      return config.python_path;
-    }
-  }
-
-  // Check managed venv
-  if (config.venv_dir && isVenvValid(config.venv_dir)) {
-    const venvPython = getVenvPythonPath(config.venv_dir);
-    if (isAceteamNodesInstalled(venvPython)) {
-      return venvPython;
-    }
-  }
-
-  // Fallback to PATH detection
-  const pythonPath = await findPython();
-  if (!pythonPath) {
-    output.error(
-      "Python 3.12+ not found. Please install Python and run: ace init"
-    );
-    process.exit(1);
-  }
-
-  if (!isAceteamNodesInstalled(pythonPath)) {
-    output.warn("aceteam-nodes is not installed.");
-    console.log("Installing aceteam-nodes...");
-    try {
-      installAceteamNodes(pythonPath);
-      output.success("aceteam-nodes installed");
-    } catch {
-      output.error(
-        "Failed to install aceteam-nodes. Try: pip install aceteam-nodes"
-      );
-      process.exit(1);
-    }
-  }
-
-  return pythonPath;
-}
-
-function parseInputArgs(inputs: string[]): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const item of inputs) {
-    const eqIndex = item.indexOf("=");
-    if (eqIndex === -1) {
-      output.error(`Invalid input format: ${item}. Use key=value`);
-      process.exit(1);
-    }
-    result[item.slice(0, eqIndex)] = item.slice(eqIndex + 1);
-  }
-  return result;
-}
-
-async function runRemoteWorkflow(
-  file: string,
-  input: Record<string, string>
-): Promise<void> {
-  const config = loadConfig();
-  if (!config.fabric_url || !config.fabric_api_key) {
-    output.error(
-      "Fabric not configured. Run: ace fabric login"
-    );
-    process.exit(1);
-  }
-
-  const client = new FabricClient(config.fabric_url, config.fabric_api_key);
-
-  const discoverSpinner = ora("Discovering available nodes...").start();
-  try {
-    const nodes = (await client.discover()) as Array<Record<string, unknown>>;
-    if (!Array.isArray(nodes) || nodes.length === 0) {
-      discoverSpinner.fail("No remote nodes available");
-      process.exit(1);
-    }
-    discoverSpinner.succeed(
-      `Found ${nodes.length} node${nodes.length === 1 ? "" : "s"}`
-    );
-  } catch (err) {
-    discoverSpinner.fail("Failed to discover nodes");
-    output.error(String(err));
-    process.exit(1);
-  }
-
-  const workflow = JSON.parse(readFileSync(file, "utf-8"));
-
-  const runSpinner = ora("Enqueuing workflow on Fabric...").start();
-  try {
-    const result = (await client.enqueueWorkflow(workflow, input)) as Record<
-      string,
-      unknown
-    >;
-    runSpinner.succeed("Workflow enqueued");
-
-    console.log();
-    console.log(chalk.bold("Result:"));
-    console.log(JSON.stringify(result, null, 2));
-  } catch (err) {
-    runSpinner.fail("Remote workflow execution failed");
-    output.error(String(err));
-    process.exit(1);
-  }
-}
+import { ensurePython } from "../utils/ensure-python.js";
 
 export const workflowCommand = new Command("workflow")
-  .description("Workflow operations");
-
-workflowCommand
-  .command("run <file>")
-  .description("Run a workflow from a JSON file")
-  .option("-i, --input <key=value...>", "Input values", [])
-  .option("-v, --verbose", "Show raw stderr debug output")
-  .option("--config <path>", "Config file path")
-  .option("--remote", "Run on remote Fabric node instead of locally")
-  .action(
-    async (
-      file: string,
-      options: {
-        input: string[];
-        verbose?: boolean;
-        config?: string;
-        remote?: boolean;
-      }
-    ) => {
-      // Check file exists
-      if (!existsSync(file)) {
-        output.error(`File not found: ${file}`);
-        process.exit(1);
-      }
-
-      // Validate it's parseable JSON
-      try {
-        JSON.parse(readFileSync(file, "utf-8"));
-      } catch {
-        output.error(`Invalid JSON file: ${file}`);
-        process.exit(1);
-      }
-
-      const input = parseInputArgs(options.input);
-
-      // Remote execution via Fabric
-      if (options.remote) {
-        await runRemoteWorkflow(file, input);
-        return;
-      }
-
-      // Local execution via Python
-      const pythonPath = await ensurePython();
-
-      const spinner = ora("Running workflow...").start();
-
-      try {
-        const result = await runWorkflow(pythonPath, file, input, {
-          verbose: options.verbose,
-          config: options.config,
-          onProgress: (event) => {
-            switch (event.type) {
-              case "started":
-                spinner.text = `Running workflow (${event.totalNodes} nodes)...`;
-                break;
-              case "node_running":
-                if (event.totalNodes && event.currentNode) {
-                  spinner.text = `Running node ${event.currentNode}/${event.totalNodes}: ${event.nodeName}...`;
-                } else {
-                  spinner.text = `Running ${event.nodeName}...`;
-                }
-                break;
-              case "node_done":
-                // Keep spinner going, text will update on next event
-                break;
-              case "node_error":
-                spinner.text = `Error in ${event.nodeName}: ${event.message}`;
-                break;
-            }
-          },
-        });
-
-        if (result.success) {
-          spinner.succeed("Workflow completed");
-          console.log();
-          console.log(chalk.bold("Output:"));
-          console.log(JSON.stringify(result.output, null, 2));
-        } else {
-          spinner.fail("Workflow failed");
-
-          const rawError =
-            result.error ||
-            (result.errors ? JSON.stringify(result.errors) : "Unknown error");
-          const classified = classifyPythonError(rawError);
-
-          console.error(chalk.red(classified.message));
-          if (classified.suggestion) {
-            console.error(chalk.dim(classified.suggestion));
-          }
-          process.exit(1);
-        }
-      } catch (err) {
-        spinner.fail("Workflow execution error");
-
-        const classified = classifyPythonError(String(err));
-        console.error(chalk.red(classified.message));
-        if (classified.suggestion) {
-          console.error(chalk.dim(classified.suggestion));
-        }
-        process.exit(1);
-      }
-    }
-  );
+  .description("Workflow authoring and validation");
 
 workflowCommand
   .command("validate <file>")
@@ -251,15 +34,24 @@ workflowCommand
     }
 
     // Basic structural checks (TypeScript-only)
-    if (
-      typeof jsonData !== "object" ||
-      jsonData === null ||
-      !("nodes" in jsonData) ||
-      !("inputs" in jsonData) ||
-      !("outputs" in jsonData)
-    ) {
+    // Support both v2 (input_node/inner_nodes/output_node) and v1 (nodes/inputs/outputs)
+    if (typeof jsonData !== "object" || jsonData === null) {
+      output.error("Invalid workflow: not a JSON object");
+      process.exit(1);
+    }
+
+    const isV2 =
+      "input_node" in jsonData &&
+      "inner_nodes" in jsonData &&
+      "output_node" in jsonData;
+    const isV1 =
+      "nodes" in jsonData &&
+      "inputs" in jsonData &&
+      "outputs" in jsonData;
+
+    if (!isV2 && !isV1) {
       output.error(
-        "Invalid workflow: missing required fields (nodes, inputs, outputs)"
+        "Invalid workflow: missing required fields (input_node, inner_nodes, output_node, edges)"
       );
       process.exit(1);
     }
@@ -269,6 +61,28 @@ workflowCommand
     const result = await validateWorkflow(pythonPath, file);
 
     if (result.valid) {
+      // Also check node types against the cache
+      const { invalid, available } = await validateNodeTypes(
+        pythonPath,
+        file
+      );
+      if (invalid.length > 0) {
+        output.warn(
+          `Unknown node type${invalid.length > 1 ? "s" : ""}: ${invalid.join(", ")}`
+        );
+        if (available.length > 0) {
+          console.log(
+            chalk.dim(`  Available: ${available.join(", ")}`)
+          );
+        }
+        console.log(
+          chalk.dim(
+            "  Run 'ace workflow list-nodes' for all available types"
+          )
+        );
+        process.exit(1);
+      }
+
       output.success("Valid workflow");
       console.log(
         `  Nodes: ${result.nodes}, Inputs: ${JSON.stringify(result.inputs)}, Outputs: ${JSON.stringify(result.outputs)}`
@@ -373,8 +187,8 @@ workflowCommand
       // Load template workflow JSON
       const workflow = structuredClone(template.workflow);
 
-      // Prompt for node parameter customization
-      const nodes = workflow.nodes as Array<{
+      // Prompt for node parameter customization (v2: inner_nodes)
+      const nodes = (workflow.inner_nodes || workflow.nodes || []) as Array<{
         id: string;
         type: string;
         params: Record<string, string>;
@@ -405,15 +219,16 @@ workflowCommand
       output.success(`Created ${outputPath}`);
 
       // Build a helpful run command
-      const inputNames = (workflow.inputs as Array<{ name: string }>).map(
-        (i) => i.name
-      );
+      const inputNode = workflow.input_node as
+        | { params?: { fields?: Record<string, unknown> } }
+        | undefined;
+      const inputNames = Object.keys(inputNode?.params?.fields ?? {});
       const inputArgs = inputNames
         .map((name) => `${name}='...'`)
         .join(" --input ");
 
       console.log(
-        chalk.dim(`\nRun: ace workflow run ${outputPath} --input ${inputArgs}`)
+        chalk.dim(`\nRun: ace run ${outputPath} --input ${inputArgs}`)
       );
     } finally {
       rl.close();

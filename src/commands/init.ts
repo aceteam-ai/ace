@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import chalk from "chalk";
@@ -9,6 +9,7 @@ import ora from "ora";
 import { getConfigPath, loadConfig, saveConfig } from "../utils/config.js";
 import {
   findPython,
+  findUv,
   getPythonVersion,
   createVenv,
   getVenvPythonPath,
@@ -16,9 +17,81 @@ import {
   installAceteamNodes,
   isAceteamNodesInstalled,
 } from "../utils/python.js";
+import { detectProvider, providerLabel } from "../utils/provider-detect.js";
+import { DEMOS } from "../demos/index.js";
 import * as output from "../utils/output.js";
 
 const DEFAULT_VENV_DIR = join(homedir(), ".ace", "venv");
+
+// ── Exported setup functions (reusable by TUI) ──────────────
+
+export async function setupPython(): Promise<{
+  pythonPath: string | null;
+  version: string;
+  hasUv: boolean;
+}> {
+  const uvPath = await findUv();
+  const systemPython = await findPython();
+
+  if (!systemPython && !uvPath) {
+    // Try to find any Python to give a better error
+    const candidates = ["python3", "python"];
+    for (const name of candidates) {
+      try {
+        const { execFileSync } = await import("node:child_process");
+        const ver = execFileSync(name, ["--version"], {
+          encoding: "utf-8",
+        }).trim();
+        const match = ver.match(/Python (\d+\.\d+)/);
+        if (match) {
+          throw new Error(
+            `Found ${ver} at ${name}. Python 3.12+ required (or install uv: https://docs.astral.sh/uv/).`
+          );
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("Python 3.12+")) {
+          throw err;
+        }
+      }
+    }
+    throw new Error(
+      "Neither Python 3.12+ nor uv found.\n" +
+        "  Install uv (recommended): curl -LsSf https://astral.sh/uv/install.sh | sh\n" +
+        "  Or install Python 3.12+:  https://www.python.org/downloads/"
+    );
+  }
+
+  if (systemPython) {
+    const version = getPythonVersion(systemPython);
+    const versionStr = version
+      ? `${version.major}.${version.minor}.${version.patch}`
+      : "unknown";
+    return { pythonPath: systemPython, version: versionStr, hasUv: !!uvPath };
+  }
+
+  // uv available but no system Python — uv will provision Python
+  return { pythonPath: null, version: "managed by uv", hasUv: true };
+}
+
+export async function setupVenv(
+  systemPython: string | null,
+  venvDir: string = DEFAULT_VENV_DIR
+): Promise<{ venvDir: string; venvPython: string }> {
+  if (isVenvValid(venvDir)) {
+    return { venvDir, venvPython: getVenvPythonPath(venvDir) };
+  }
+
+  await createVenv(systemPython, venvDir);
+  return { venvDir, venvPython: getVenvPythonPath(venvDir) };
+}
+
+export async function installDeps(venvPython: string): Promise<void> {
+  if (!isAceteamNodesInstalled(venvPython)) {
+    await installAceteamNodes(venvPython);
+  }
+}
+
+// ── Init command ─────────────────────────────────────────────
 
 export const initCommand = new Command("init")
   .description("Initialize AceTeam CLI configuration")
@@ -28,44 +101,31 @@ export const initCommand = new Command("init")
 
     console.log(chalk.bold("\nAceTeam CLI Setup\n"));
 
-    // Step 1: Prerequisites — detect Python
+    // Step 1: Prerequisites — detect toolchain
     console.log(chalk.bold("1. Prerequisites"));
-    const systemPython = await findPython();
+    let systemPython: string | null;
+    let versionStr: string;
+    let hasUv: boolean;
 
-    if (!systemPython) {
-      // Try to find any Python to give a better error
-      const candidates = ["python3", "python"];
-      for (const name of candidates) {
-        try {
-          const { execSync } = await import("node:child_process");
-          const version = execSync(`${name} --version`, {
-            encoding: "utf-8",
-          }).trim();
-          const match = version.match(/Python (\d+\.\d+)/);
-          if (match) {
-            output.error(
-              `Found ${version} at ${name}. Python 3.12+ required.`
-            );
-            rl.close();
-            process.exit(1);
-          }
-        } catch {
-          // Not found
-        }
+    try {
+      const result = await setupPython();
+      systemPython = result.pythonPath;
+      versionStr = result.version;
+      hasUv = result.hasUv;
+
+      if (hasUv) {
+        output.success(`uv detected (fast package manager)`);
       }
-
-      output.error(
-        "Python not found. Please install Python 3.12 or later."
-      );
+      if (systemPython) {
+        output.success(`Python ${versionStr} (${systemPython})`);
+      } else {
+        output.info(`Python will be provisioned by uv`);
+      }
+    } catch (err) {
+      output.error(err instanceof Error ? err.message : String(err));
       rl.close();
       process.exit(1);
     }
-
-    const version = getPythonVersion(systemPython);
-    const versionStr = version
-      ? `${version.major}.${version.minor}.${version.patch}`
-      : "unknown";
-    output.success(`Python ${versionStr} (${systemPython})`);
 
     // Step 2: Venv setup
     console.log(chalk.bold("\n2. Virtual environment"));
@@ -81,7 +141,7 @@ export const initCommand = new Command("init")
     } else {
       const spinner = ora(`Creating venv at ${venvDir}...`).start();
       try {
-        createVenv(systemPython, venvDir);
+        await createVenv(systemPython, venvDir);
         const venvPython = getVenvPythonPath(venvDir);
         config.venv_dir = venvDir;
         config.python_path = venvPython;
@@ -102,13 +162,20 @@ export const initCommand = new Command("init")
     if (isAceteamNodesInstalled(venvPython)) {
       output.success("aceteam-nodes is installed");
     } else {
-      const spinner = ora("Installing aceteam-nodes...").start();
+      const method = hasUv ? "uv" : "pip";
+      const spinner = ora(
+        `Installing aceteam-nodes via ${method}...`
+      ).start();
       try {
-        installAceteamNodes(venvPython);
+        await installAceteamNodes(venvPython);
         spinner.succeed("aceteam-nodes installed");
       } catch {
         spinner.fail("Failed to install aceteam-nodes");
-        output.error("Try manually: pip install aceteam-nodes");
+        if (hasUv) {
+          output.error("Try manually: uv pip install aceteam-nodes");
+        } else {
+          output.error("Try manually: pip install aceteam-nodes");
+        }
         rl.close();
         process.exit(1);
       }
@@ -126,34 +193,134 @@ export const initCommand = new Command("init")
 
     saveConfig(config);
 
-    // Step 5: Summary
-    console.log(chalk.bold("\nSetup complete:"));
-    console.log(
-      `  ${chalk.green("✓")} Python ${versionStr} (${config.python_path})`
-    );
-    console.log(`  ${chalk.green("✓")} aceteam-nodes installed`);
-    console.log(`  ${chalk.green("✓")} Config: ${configPath}`);
-    console.log(`  ${chalk.green("✓")} Model: ${config.default_model}`);
+    // Create patterns directory for user-defined patterns
+    const patternsDir = join(homedir(), ".ace", "patterns");
+    if (!existsSync(patternsDir)) {
+      mkdirSync(patternsDir, { recursive: true });
+    }
 
-    // LLM provider reminder
+    // Step 5: Provider detection & tiered on-ramp
+    console.log(chalk.bold("\n5. LLM Provider"));
+
+    const provider = await detectProvider();
+
+    if (provider.provider === "aceteam") {
+      output.success(
+        `Connected to AceTeam Fabric — full node support available`
+      );
+      console.log(chalk.dim(`  ${providerLabel(provider)}`));
+    } else if (
+      provider.provider === "openai" ||
+      provider.provider === "anthropic"
+    ) {
+      output.success(`Using ${providerLabel(provider)}`);
+    } else if (provider.provider === "ollama") {
+      output.success(`Ollama detected — ${provider.model}`);
+    } else {
+      output.warn("No LLM provider detected");
+      console.log(
+        "\n" +
+          chalk.bold("  Set up a provider to run patterns live:") +
+          "\n" +
+          "\n" +
+          `  ${chalk.cyan("Tier 1 — Free / Local")}` +
+          "\n" +
+          `  ${chalk.dim("ollama serve && ollama pull llama3")}` +
+          "\n" +
+          "\n" +
+          `  ${chalk.cyan("Tier 2 — Bring Your Own Key")}` +
+          "\n" +
+          `  ${chalk.dim("export OPENAI_API_KEY=sk-...")}` +
+          "\n" +
+          `  ${chalk.dim("export ANTHROPIC_API_KEY=sk-ant-...")}` +
+          "\n" +
+          "\n" +
+          `  ${chalk.cyan("Tier 3 — AceTeam Platform")}` +
+          "\n" +
+          `  ${chalk.dim("ace fabric login    # Full node support + remote execution")}`
+      );
+    }
+
+    // Done — offer demo
+    console.log(chalk.bold("\n\nSetup complete.\n"));
+    const wantDemo = await rl.question(
+      chalk.bold("Want to try a quick demo? ") + chalk.dim("(Y/n) ")
+    );
+
+    if (wantDemo.trim().toLowerCase() !== "n") {
+      if (provider.provider) {
+        // Live demo
+        console.log();
+        output.info(
+          `Running: ${chalk.cyan('ace run explain "What is quantum computing?"')}`
+        );
+        console.log();
+
+        try {
+          const { ensurePython } = await import("../utils/ensure-python.js");
+          const { loadPattern, runPattern } = await import(
+            "../utils/patterns.js"
+          );
+          const pythonPath = await ensurePython();
+          const pattern = loadPattern("explain");
+
+          if (pattern) {
+            const spinner = ora("Running explain pattern...").start();
+            const result = await runPattern(
+              pythonPath,
+              pattern,
+              "What is quantum computing?",
+              { model: provider.model }
+            );
+            spinner.succeed("Done!");
+            console.log();
+            console.log(result);
+          }
+        } catch (err) {
+          output.warn(
+            `Live demo failed: ${err instanceof Error ? err.message : String(err)}`
+          );
+          showCannedDemo();
+        }
+      } else {
+        // Canned demo
+        showCannedDemo();
+      }
+    }
+
     console.log(
       "\n" +
-        chalk.bold("LLM Provider:") +
-        "\n  Cloud — set an API key:" +
-        "\n  " +
-        chalk.dim("export OPENAI_API_KEY=sk-...") +
-        "\n  " +
-        chalk.dim("export ANTHROPIC_API_KEY=sk-ant-...") +
+        chalk.dim("─".repeat(50)) +
         "\n" +
-        "\n  Local — use Ollama or any OpenAI-compatible server:" +
-        "\n  " +
-        chalk.dim("ollama serve && ollama pull llama3") +
-        "\n  " +
-        chalk.dim("# then set model to ollama/llama3 in your workflow") +
+        chalk.bold("Next steps:") +
+        "\n" +
+        `  ${chalk.cyan("ace run --list")}        List available patterns` +
+        "\n" +
+        `  ${chalk.cyan("ace run summarize")}     Run a pattern on text` +
+        "\n" +
+        `  ${chalk.cyan("ace")}                   Launch interactive mode` +
         "\n"
     );
 
-    console.log(chalk.dim("Try: ace workflow list-templates"));
-
     rl.close();
   });
+
+function showCannedDemo(): void {
+  const demo = DEMOS["explain"];
+  if (!demo) return;
+
+  console.log();
+  console.log(
+    chalk.dim("  Here's what ") +
+      chalk.cyan("ace run explain") +
+      chalk.dim(" produces:")
+  );
+  console.log(chalk.dim("  Input: ") + chalk.white(`"${demo.input}"`));
+  console.log();
+
+  // Indent demo output
+  const lines = demo.output.split("\n");
+  for (const line of lines) {
+    console.log(`  ${line}`);
+  }
+}
