@@ -1,68 +1,44 @@
 {
-  "name": "Entity Extraction Pipeline",
-  "description": "Extract entities and relations from text using the configured extraction backend.",
-  "nodes": [
+  "name": "Entity Extraction",
+  "description": "Extract named entities from text using an LLM.",
+  "input_node": {
+    "id": "input",
+    "type": "Input",
+    "params": {
+      "fields": {
+        "text": {
+          "type": "string",
+          "title": "Text",
+          "description": "The text to extract entities from"
+        }
+      }
+    }
+  },
+  "output_node": {
+    "id": "output",
+    "type": "Output",
+    "params": {
+      "fields": {
+        "entities": {
+          "type": "string",
+          "title": "Entities",
+          "description": "Extracted entities as structured text"
+        }
+      }
+    }
+  },
+  "inner_nodes": [
     {
-      "id": "extraction",
-      "type": "Extraction",
+      "id": "llm",
+      "type": "LLM",
       "params": {
-        "backend": "gliner2",
-        "confidence_threshold": "0.5"
-      },
-      "position": { "x": 400, "y": 200 }
-    }
-  ],
-  "edges": [],
-  "input_edges": [
-    {
-      "input_key": "text",
-      "target_id": "extraction",
-      "target_key": "text"
-    },
-    {
-      "input_key": "extraction_schema",
-      "target_id": "extraction",
-      "target_key": "extraction_schema"
-    }
-  ],
-  "output_edges": [
-    {
-      "source_id": "extraction",
-      "source_key": "result",
-      "output_key": "result"
-    }
-  ],
-  "inputs": [
-    {
-      "name": "text",
-      "type": "LONG_TEXT",
-      "display_name": "Text Content",
-      "description": "The text to extract entities and relations from"
-    },
-    {
-      "name": "extraction_schema",
-      "type": "JSON",
-      "display_name": "Extraction Schema",
-      "description": "JSON schema defining entity types and relation types to extract",
-      "default": {
-        "entity_types": [
-          { "type_id": "person" },
-          { "type_id": "organization" },
-          { "type_id": "location" }
-        ],
-        "relation_types": [
-          { "type_id": "works_at", "description": "Person works at organization" },
-          { "type_id": "located_in", "description": "Entity is located in a place" }
-        ]
+        "model": "gpt-4o-mini",
+        "system_prompt": "Extract all named entities (people, organizations, locations) from the text. Return them as a structured list grouped by type."
       }
     }
   ],
-  "outputs": [
-    {
-      "name": "result",
-      "type": "JSON",
-      "display_name": "Extraction Result",
-      "description": "Extracted entities and relations with confidence scores (V2 ExtractionResult)"
-    }
+  "edges": [
+    { "source_id": "input", "source_key": "text", "target_id": "llm", "target_key": "prompt" },
+    { "source_id": "llm", "source_key": "response", "target_id": "output", "target_key": "entities" }
   ]
 }
