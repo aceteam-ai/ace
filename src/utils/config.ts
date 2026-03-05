@@ -13,6 +13,8 @@ export interface AceConfig {
   python_path?: string;
   venv_dir?: string;
   patterns_dir?: string;
+  api_keys?: { openai?: string; anthropic?: string };
+  user_email?: string;
 }
 
 export function getConfigPath(): string {

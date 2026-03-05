@@ -220,7 +220,7 @@ export const initCommand = new Command("init")
       output.warn("No LLM provider detected");
       console.log(
         "\n" +
-          chalk.bold("  Set up a provider to run patterns live:") +
+          chalk.bold("  Set up a provider to run tasks:") +
           "\n" +
           "\n" +
           `  ${chalk.cyan("Tier 1 — Free / Local")}` +
@@ -237,7 +237,7 @@ export const initCommand = new Command("init")
           "\n" +
           `  ${chalk.cyan("Tier 3 — AceTeam Platform")}` +
           "\n" +
-          `  ${chalk.dim("ace fabric login    # Full node support + remote execution")}`
+          `  ${chalk.dim("ace login           # Full node support + remote execution")}`
       );
     }
 
@@ -294,9 +294,9 @@ export const initCommand = new Command("init")
         "\n" +
         chalk.bold("Next steps:") +
         "\n" +
-        `  ${chalk.cyan("ace run --list")}        List available patterns` +
+        `  ${chalk.cyan("ace run --list")}        List available tasks` +
         "\n" +
-        `  ${chalk.cyan("ace run summarize")}     Run a pattern on text` +
+        `  ${chalk.cyan("ace run summarize")}     Run a task on text` +
         "\n" +
         `  ${chalk.cyan("ace")}                   Launch interactive mode` +
         "\n"

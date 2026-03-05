@@ -31,6 +31,9 @@ vi.mock("../../src/utils/python.js", () => ({
 
 vi.mock("../../src/utils/errors.js", () => ({
   classifyPythonError: vi.fn((msg: string) => ({ message: msg })),
+  classifyWorkflowError: vi.fn((result: { error?: string }) => ({
+    message: result.error || "Unknown error",
+  })),
 }));
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
