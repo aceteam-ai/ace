@@ -76,7 +76,7 @@ PR descriptions must tell the full story — not just what changed, but **why it
 
 **Required sections:**
 
-1. **Context** — What initiative/phase/issue does this PR belong to? What problem does it solve? Why should the reader care? Include a code snippet or user-facing example if it helps convey the experience.
+1. **Context** — Always structure as **Why / What / How**: **Why** — what problem does this solve, what motivated the change? **What** — what is being built or changed at a high level? **How** — what approach was taken and why? Include a code snippet or user-facing example if it helps convey the experience.
 2. **Summary** — What was built, organized by component. Each item should explain both the *what* and the *why* (e.g., "Atomic Lua scripts for concurrency safety" not just "Added Lua scripts"). Include architectural decisions and their rationale.
 3. **Test plan** — Table or checklist of test groups with counts and coverage areas. Be specific about what edge cases are covered (e.g., "concurrent atomicity: 5 parallel requests").
 4. **Related** — Link to parent issues, prior PRs, and protocol proposals that provide additional context.

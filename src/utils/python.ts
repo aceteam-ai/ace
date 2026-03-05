@@ -146,14 +146,14 @@ export async function installAceteamNodes(
   if (uvPath) {
     execFileSync(
       uvPath,
-      ["pip", "install", "aceteam-nodes", "--python", pythonPath],
+      ["pip", "install", "aceteam-nodes[llm]", "--python", pythonPath],
       { stdio: ["ignore", "inherit", "inherit"] }
     );
     return;
   }
 
   // Fallback: try pip via the venv Python
-  execFileSync(pythonPath, ["-m", "pip", "install", "aceteam-nodes"], {
+  execFileSync(pythonPath, ["-m", "pip", "install", "aceteam-nodes[llm]"], {
     stdio: ["ignore", "inherit", "inherit"],
   });
 }
@@ -165,6 +165,7 @@ export interface RunResult {
   output?: Record<string, unknown>;
   errors?: Record<string, unknown>;
   error?: string;
+  stderr?: string;
 }
 
 export interface ProgressEvent {
@@ -303,28 +304,33 @@ export function runWorkflow(
         // Try parsing stdout as JSON first
         if (stdout.trim()) {
           const result = JSON.parse(stdout) as RunResult;
+          result.stderr = stderr;
           resolve(result);
         } else if (stderr.trim()) {
           // Try parsing stderr (error case)
           try {
             const result = JSON.parse(stderr) as RunResult;
+            result.stderr = stderr;
             resolve(result);
           } catch {
             resolve({
               success: false,
               error: stderr.trim(),
+              stderr,
             });
           }
         } else {
           resolve({
             success: false,
             error: `Process exited with code ${code}`,
+            stderr,
           });
         }
       } catch {
         resolve({
           success: false,
           error: stdout || stderr || `Process exited with code ${code}`,
+          stderr,
         });
       }
     });

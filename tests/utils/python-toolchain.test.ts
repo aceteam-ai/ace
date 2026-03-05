@@ -125,7 +125,7 @@ describe("installAceteamNodes", () => {
 
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "/usr/bin/uv",
-      ["pip", "install", "aceteam-nodes", "--python", "/home/user/.ace/venv/bin/python"],
+      ["pip", "install", "aceteam-nodes[llm]", "--python", "/home/user/.ace/venv/bin/python"],
       { stdio: ["ignore", "inherit", "inherit"] }
     );
   });
@@ -137,7 +137,7 @@ describe("installAceteamNodes", () => {
 
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "/home/user/.ace/venv/bin/python",
-      ["-m", "pip", "install", "aceteam-nodes"],
+      ["-m", "pip", "install", "aceteam-nodes[llm]"],
       { stdio: ["ignore", "inherit", "inherit"] }
     );
   });
