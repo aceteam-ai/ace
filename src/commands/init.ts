@@ -17,7 +17,13 @@ import {
   installAceteamNodes,
   isAceteamNodesInstalled,
 } from "../utils/python.js";
+import { confirm } from "@inquirer/prompts";
 import { detectProvider, providerLabel } from "../utils/provider-detect.js";
+import {
+  detectContainerRuntime,
+  isProxyRunning,
+  startProxy,
+} from "../utils/proxy.js";
 import { DEMOS } from "../demos/index.js";
 import * as output from "../utils/output.js";
 
@@ -238,6 +244,56 @@ export const initCommand = new Command("init")
           `  ${chalk.cyan("Tier 3 — AceTeam Platform")}` +
           "\n" +
           `  ${chalk.dim("ace login           # Full node support + remote execution")}`
+      );
+    }
+
+    // Step 6: SafeClaw proxy
+    console.log(chalk.bold("\n6. SafeClaw Proxy"));
+
+    const containerRuntime = detectContainerRuntime();
+    if (containerRuntime) {
+      const alreadyRunning = isProxyRunning();
+      if (alreadyRunning) {
+        ora().succeed("SafeClaw proxy already running on port 8899");
+        config.proxy_enabled = true;
+        config.proxy_url = "http://localhost:8899";
+        config.proxy_container = "safeclaw-proxy";
+        saveConfig(config);
+      } else {
+        const startSafety = await confirm({
+          message:
+            "Start SafeClaw proxy for safety + cost tracking? (recommended)",
+          default: true,
+        });
+
+        if (startSafety) {
+          const spinner = ora("Starting SafeClaw proxy...").start();
+          const started = startProxy(containerRuntime);
+          if (started) {
+            spinner.succeed(
+              "SafeClaw proxy running — dashboard at http://localhost:8899/aep/"
+            );
+            config.proxy_enabled = true;
+            config.proxy_url = "http://localhost:8899";
+            config.proxy_container = "safeclaw-proxy";
+            saveConfig(config);
+          } else {
+            spinner.fail(
+              "Could not start proxy container. You can start it manually later with:"
+            );
+            console.log(
+              chalk.dim(
+                `  ${containerRuntime} run -d --name safeclaw-proxy -p 8899:8899 ghcr.io/aceteam-ai/aep-proxy:latest`
+              )
+            );
+          }
+        } else {
+          output.info("Skipped — run ace init again to enable later");
+        }
+      }
+    } else {
+      output.info(
+        "Install Podman or Docker to enable SafeClaw safety proxy"
       );
     }
 
