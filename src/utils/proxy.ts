@@ -1,4 +1,4 @@
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 export interface ProxyConfig {
   enabled: boolean;
@@ -72,7 +72,7 @@ export function startProxy(
     // Poll until proxy is ready (up to ~15 s)
     for (let i = 0; i < 30; i++) {
       if (isProxyRunning(port)) return true;
-      execSync("sleep 0.5", { stdio: "ignore" });
+      execFileSync("sleep", ["0.5"], { stdio: "ignore" });
     }
     return false;
   } catch {
