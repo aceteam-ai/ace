@@ -15,6 +15,9 @@ export interface AceConfig {
   patterns_dir?: string;
   api_keys?: { openai?: string; anthropic?: string };
   user_email?: string;
+  proxy_enabled?: boolean;
+  proxy_url?: string;
+  proxy_container?: string;
 }
 
 export function getConfigPath(): string {
