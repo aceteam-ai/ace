@@ -102,7 +102,8 @@ export type NativeHarnessRejectionCode =
   | "invalid_session"
   | "invalid_state"
   | "stale_approval"
-  | "approval_mismatch";
+  | "approval_mismatch"
+  | "invalid_approval_decision";
 
 export type NativeHarnessCommandResult<T> =
   | { status: "ok"; value: T }

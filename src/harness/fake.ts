@@ -24,7 +24,10 @@ import {
 interface FakeSession {
   identity: NativeHarnessSessionIdentity;
   listeners: Set<NativeHarnessEventListener>;
-  pendingApprovals: Map<string, string | undefined>;
+  pendingApprovals: Map<
+    string,
+    { correlationId: string | undefined; choices: ReadonlySet<string> }
+  >;
   sequence: number;
   state: "active" | "completed" | "cancelled" | "error";
 }
@@ -68,6 +71,7 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
   readonly capabilities: NativeHarnessCapabilities;
 
   private readonly sessions = new Map<string, FakeSession>();
+  private readonly usedSessionIds = new Set<string>();
   private readonly knownNativeSessions = new Map<string, KnownNativeSession>();
   private readonly failures = new Map<NativeHarnessOperation, FakeFailure>();
   private readonly now: () => string;
@@ -91,11 +95,11 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
     if (blocked) {
       return blocked;
     }
-    if (this.sessions.has(command.sessionId)) {
+    if (this.usedSessionIds.has(command.sessionId)) {
       return {
         status: "rejected",
         code: "duplicate_session",
-        message: `Session ${command.sessionId} already exists.`,
+        message: `Session ${command.sessionId} has already been used by this adapter.`,
       };
     }
 
@@ -106,6 +110,7 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
       nativeSessionId,
     };
     this.sessions.set(command.sessionId, this.createSession(identity));
+    this.usedSessionIds.add(command.sessionId);
     this.knownNativeSessions.set(nativeSessionId, {
       workspace: command.workspace,
     });
@@ -196,7 +201,8 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
       return session;
     }
 
-    if (!session.value.pendingApprovals.has(command.approvalId)) {
+    const pendingApproval = session.value.pendingApprovals.get(command.approvalId);
+    if (!pendingApproval) {
       return {
         status: "rejected",
         code: "stale_approval",
@@ -204,18 +210,21 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
       };
     }
 
-    const expectedCorrelationId = session.value.pendingApprovals.get(
-      command.approvalId
-    );
-    if (expectedCorrelationId !== command.correlationId) {
+    if (pendingApproval.correlationId !== command.correlationId) {
       return {
         status: "rejected",
         code: "approval_mismatch",
         message: "The approval response does not match the pending request.",
       };
     }
+    if (!pendingApproval.choices.has(command.decision)) {
+      return {
+        status: "rejected",
+        code: "invalid_approval_decision",
+        message: "The approval response was not one of the offered choices.",
+      };
+    }
 
-    session.value.pendingApprovals.delete(command.approvalId);
     this.publish(
       session.value,
       {
@@ -235,11 +244,11 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
     if (blocked) {
       return blocked;
     }
-    if (this.sessions.has(command.sessionId)) {
+    if (this.usedSessionIds.has(command.sessionId)) {
       return {
         status: "rejected",
         code: "duplicate_session",
-        message: `Session ${command.sessionId} already exists.`,
+        message: `Session ${command.sessionId} has already been used by this adapter.`,
       };
     }
     const knownSession = this.knownNativeSessions.get(command.nativeSessionId);
@@ -257,6 +266,7 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
       nativeSessionId: command.nativeSessionId,
     };
     this.sessions.set(command.sessionId, this.createSession(identity));
+    this.usedSessionIds.add(command.sessionId);
     return { status: "ok", value: identity };
   }
 
@@ -288,9 +298,6 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
       return session;
     }
 
-    if (payload.type === "approval.requested") {
-      session.value.pendingApprovals.set(payload.approvalId, correlationId);
-    }
     return {
       status: "ok",
       value: this.publish(session.value, payload, correlationId),
@@ -387,7 +394,14 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
       timestamp: this.now(),
     };
 
-    if (payload.type === "session.completed") {
+    if (payload.type === "approval.requested") {
+      session.pendingApprovals.set(payload.approvalId, {
+        correlationId,
+        choices: new Set(payload.choices),
+      });
+    } else if (payload.type === "approval.resolved") {
+      session.pendingApprovals.delete(payload.approvalId);
+    } else if (payload.type === "session.completed") {
       session.state = "completed";
       session.pendingApprovals.clear();
     } else if (payload.type === "session.cancelled") {

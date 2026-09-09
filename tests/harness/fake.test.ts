@@ -295,6 +295,79 @@ describe("FakeNativeHarnessAdapter", () => {
     });
   });
 
+  it("expires a pending request when the native approval resolves", async () => {
+    const adapter = new FakeNativeHarnessAdapter();
+    const session = await startSession(adapter, "session-a");
+    adapter.emit(
+      session,
+      {
+        type: "approval.requested",
+        approvalId: "approval-1",
+        prompt: "Proceed?",
+        choices: ["allow", "deny"],
+      },
+      "request-1"
+    );
+    adapter.emit(
+      session,
+      {
+        type: "approval.resolved",
+        approvalId: "approval-1",
+        decision: "deny",
+      },
+      "request-1"
+    );
+
+    const reply = await adapter.respondToApproval({
+      type: "approval.respond",
+      session,
+      approvalId: "approval-1",
+      decision: "allow",
+      correlationId: "request-1",
+    });
+
+    expect(reply).toMatchObject({
+      status: "rejected",
+      code: "stale_approval",
+    });
+  });
+
+  it("rejects an unoffered decision without consuming the request", async () => {
+    const adapter = new FakeNativeHarnessAdapter();
+    const session = await startSession(adapter, "session-a");
+    adapter.emit(
+      session,
+      {
+        type: "approval.requested",
+        approvalId: "approval-1",
+        prompt: "Proceed?",
+        choices: ["allow", "deny"],
+      },
+      "request-1"
+    );
+
+    const unoffered = await adapter.respondToApproval({
+      type: "approval.respond",
+      session,
+      approvalId: "approval-1",
+      decision: "allow-for-session",
+      correlationId: "request-1",
+    });
+    const offered = await adapter.respondToApproval({
+      type: "approval.respond",
+      session,
+      approvalId: "approval-1",
+      decision: "allow",
+      correlationId: "request-1",
+    });
+
+    expect(unoffered).toMatchObject({
+      status: "rejected",
+      code: "invalid_approval_decision",
+    });
+    expect(offered.status).toBe("ok");
+  });
+
   it("does not allow approval responses to cross session boundaries", async () => {
     const adapter = new FakeNativeHarnessAdapter();
     const first = await startSession(adapter, "session-a");
@@ -369,6 +442,84 @@ describe("FakeNativeHarnessAdapter", () => {
     expect(reply).toMatchObject({ status: "rejected", code: "invalid_session" });
     expect(emitted).toMatchObject({ status: "rejected", code: "invalid_session" });
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse a disposed local session identity", async () => {
+    const adapter = new FakeNativeHarnessAdapter({
+      capabilities: { resume: { supported: true } },
+    });
+    const original = await startSession(adapter, "session-a");
+    const nativeSessionId = original.nativeSessionId;
+    if (!nativeSessionId) {
+      throw new Error("Expected fake session to have a native identity.");
+    }
+    await adapter.dispose({ type: "session.dispose", session: original });
+
+    const restarted = await adapter.start({
+      type: "session.start",
+      sessionId: "session-a",
+      workspace: "/synthetic/workspace",
+    });
+    const resumed = await adapter.resume({
+      type: "session.resume",
+      sessionId: "session-a",
+      nativeSessionId,
+      workspace: "/synthetic/workspace",
+    });
+
+    expect(restarted).toMatchObject({
+      status: "rejected",
+      code: "duplicate_session",
+    });
+    expect(resumed).toMatchObject({
+      status: "rejected",
+      code: "duplicate_session",
+    });
+  });
+
+  it("does not carry pending approvals into a supported resume", async () => {
+    const adapter = new FakeNativeHarnessAdapter({
+      capabilities: { resume: { supported: true } },
+    });
+    const original = await startSession(adapter, "session-a");
+    const nativeSessionId = original.nativeSessionId;
+    if (!nativeSessionId) {
+      throw new Error("Expected fake session to have a native identity.");
+    }
+    adapter.emit(
+      original,
+      {
+        type: "approval.requested",
+        approvalId: "approval-1",
+        prompt: "Proceed?",
+        choices: ["allow", "deny"],
+      },
+      "request-1"
+    );
+    await adapter.dispose({ type: "session.dispose", session: original });
+    const resumed = await adapter.resume({
+      type: "session.resume",
+      sessionId: "session-b",
+      nativeSessionId,
+      workspace: "/synthetic/workspace",
+    });
+    expect(resumed.status).toBe("ok");
+    if (resumed.status !== "ok") {
+      throw new Error("Expected fake session to resume.");
+    }
+
+    const reply = await adapter.respondToApproval({
+      type: "approval.respond",
+      session: resumed.value,
+      approvalId: "approval-1",
+      decision: "allow",
+      correlationId: "request-1",
+    });
+
+    expect(reply).toMatchObject({
+      status: "rejected",
+      code: "stale_approval",
+    });
   });
 
   it("supports disposing an individual observation without ending the session", async () => {
