@@ -440,4 +440,3 @@ export async function createPlatformClientFromConfig(options: CreatePlatformClie
   const credentials = await resolvePlatformCredentials(options);
   return new PlatformClient(credentials.origin, credentials.apiKey, { fetch: options.fetch });
 }
-
