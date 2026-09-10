@@ -61,6 +61,23 @@ describe("terminal workspace", () => {
     expect(view.lastFrame()).toContain("why?");
   });
 
+  it("keeps long task input bounded while submitting the complete value", async () => {
+    const executePattern = vi.fn(async () => "done");
+    const view = render(<App service={service({ detectProvider: async () => ({ provider: "openai" }), executePattern })} />);
+    await tick();
+    Object.defineProperty(view.stdout, "columns", { configurable: true, value: 48 });
+    Object.defineProperty(view.stdout, "rows", { configurable: true, value: 12 });
+    view.stdout.emit("resize");
+    await tick(); view.stdin.write("\r"); await tick();
+    const input = "hidden-prefix-" + "x".repeat(160) + "-visible-tail";
+    view.stdin.write(input); await tick();
+    expect(view.lastFrame()).toContain("visible-tail");
+    expect(view.lastFrame()).not.toContain("hidden-prefix");
+    expect(view.lastFrame()?.split("\n").length).toBeLessThanOrEqual(12);
+    view.stdin.write("\r"); await tick();
+    expect(executePattern).toHaveBeenCalledWith("summarize", input, expect.any(Object));
+  });
+
   it("cancels a live run and returns a bounded result screen", async () => {
     const executePattern = vi.fn((_id: string, _input: string, options: { signal: AbortSignal }) => new Promise<string>((_resolve, reject) => {
       options.signal.addEventListener("abort", () => {
@@ -97,6 +114,25 @@ describe("terminal workspace", () => {
     expect(onExit).not.toHaveBeenCalled();
     await tick();
     expect(onExit).toHaveBeenCalledOnce();
+  });
+
+  it("reflows result pages on height-only resize and clamps stale scroll offsets", async () => {
+    const output = "BEGIN-" + "x".repeat(1100) + "-VISIBLE-END";
+    const view = render(<App service={service({ detectProvider: async () => ({ provider: "openai" }), executePattern: async () => output })} />);
+    await tick(); view.stdin.write("\r"); await tick(); view.stdin.write("go"); await tick(); view.stdin.write("\r"); await tick();
+
+    Object.defineProperty(view.stdout, "rows", { configurable: true, value: 12 });
+    view.stdout.emit("resize"); await tick();
+    expect(view.lastFrame()).toContain("↑/↓ Scroll");
+    expect(view.lastFrame()?.split("\n").length).toBeLessThanOrEqual(12);
+
+    Object.defineProperty(view.stdout, "columns", { configurable: true, value: 48 });
+    view.stdout.emit("resize"); await tick();
+    for (let i = 0; i < 10; i++) { view.stdin.write("j"); await tick(); }
+    Object.defineProperty(view.stdout, "columns", { configurable: true, value: 200 });
+    view.stdout.emit("resize"); await tick();
+    expect(view.lastFrame()).toContain("VISIBLE-END");
+    expect(view.lastFrame()?.split("\n").length).toBeLessThanOrEqual(12);
   });
 
   it("strips terminal control sequences from results", async () => {
@@ -137,7 +173,7 @@ describe("terminal workspace", () => {
   it("collects declared workflow inputs before starting a live run", async () => {
     const executeWorkflow = vi.fn(async () => "done");
     const fake = service({
-      getWorkflowInputs: vi.fn(() => ["prompt"]),
+      getWorkflowInputs: vi.fn(() => [{ name: "prompt", schema: { type: "string" }, required: true }]),
       executeWorkflow,
     });
     const view = render(<App service={fake} />);
@@ -152,12 +188,77 @@ describe("terminal workspace", () => {
     await tick();
     view.stdin.write("\r");
     await tick();
-    expect(view.lastFrame()).toContain("Input: prompt");
+    expect(view.lastFrame()).toContain("prompt");
     view.stdin.write("hello");
     await tick();
     view.stdin.write("\r");
     await tick();
     expect(executeWorkflow).toHaveBeenCalledWith("flow.json", { prompt: "hello" }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  });
+
+
+  it("filters local templates and pages full details on a 48x12 terminal", async () => {
+    const view = render(<App service={service()} />);
+    await tick();
+    Object.defineProperty(view.stdout, "columns", { configurable: true, value: 48 });
+    Object.defineProperty(view.stdout, "rows", { configurable: true, value: 12 });
+    view.stdout.emit("resize");
+    await tick();
+    view.stdin.write("\u001b"); await tick();
+    view.stdin.write("j"); await tick();
+    view.stdin.write("j"); await tick();
+    view.stdin.write("\r"); await tick();
+    view.stdin.write("api"); await tick();
+    expect(view.lastFrame()).toContain("API to LLM");
+    expect(view.lastFrame()).not.toContain("Hello LLM");
+    expect(view.lastFrame()?.split("\n").length).toBeLessThanOrEqual(12);
+    view.stdin.write("\r"); await tick();
+    expect(view.lastFrame()).toContain("Authoring example only");
+    for (let i = 0; i < 8; i++) { view.stdin.write("j"); await tick(); }
+    expect(view.lastFrame()).toContain("Input schema");
+    expect(view.lastFrame()).toContain("URL");
+    expect(view.lastFrame()?.split("\n").length).toBeLessThanOrEqual(12);
+  });
+
+  it("sanitizes workflow schema type labels before rendering", async () => {
+    const fake = service({
+      getWorkflowInputs: () => [{
+        name: "count",
+        schema: { type: "integer\u001b]8;;https://bad.invalid\u0007value\u001b]8;;\u0007" },
+        required: true,
+      }],
+    });
+    const view = render(<App service={fake} />);
+    await tick(); view.stdin.write("\u001b"); await tick(); view.stdin.write("j"); await tick(); view.stdin.write("\r"); await tick();
+    view.stdin.write("flow.json"); await tick(); view.stdin.write("\r"); await tick();
+    expect(view.lastFrame()).toContain("integervalue");
+    expect(view.lastFrame()).not.toContain("bad.invalid");
+  });
+
+  it("keeps typed workflow validation errors on the form and submits JSON values/defaults", async () => {
+    const executeWorkflow = vi.fn(async () => "# Result\n- complete");
+    const fake = service({
+      getWorkflowInputs: () => [
+        { name: "count", schema: { type: "integer", description: "How many" }, required: true },
+        { name: "enabled", schema: { type: "boolean", default: true }, required: false },
+        { name: "note", schema: { type: "string", required: false, default: "" }, required: false },
+      ],
+      executeWorkflow,
+    });
+    const view = render(<App service={fake} />);
+    await tick(); view.stdin.write("\u001b"); await tick(); view.stdin.write("j"); await tick(); view.stdin.write("\r"); await tick();
+    view.stdin.write("flow.json"); await tick(); view.stdin.write("\r"); await tick();
+    view.stdin.write("wrong"); await tick(); view.stdin.write("\r"); await tick();
+    expect(view.lastFrame()).toContain("valid JSON");
+    for (let i = 0; i < 5; i++) { view.stdin.write("\u007f"); await tick(); }
+    view.stdin.write("3"); await tick(); view.stdin.write("\r"); await tick();
+    expect(view.lastFrame()).toContain("Enter uses true");
+    view.stdin.write("\r"); await tick();
+    expect(view.lastFrame()).toContain("default available");
+    view.stdin.write("\r"); await tick();
+    expect(executeWorkflow).toHaveBeenCalledWith("flow.json", { count: 3, enabled: true, note: "" }, expect.any(Object));
+    expect(view.lastFrame()).toContain("Result");
+    expect(view.lastFrame()).toContain("• complete");
   });
 
   it("leaves Enter handling to extension panels", async () => {

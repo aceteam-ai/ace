@@ -1,0 +1,50 @@
+{
+  "name": "Summarize",
+  "description": "Structured summary with main points and conclusion",
+  "input_node": {
+    "id": "input",
+    "type": "Input",
+    "params": {
+      "fields": {
+        "prompt": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "output_node": {
+    "id": "output",
+    "type": "Output",
+    "params": {
+      "fields": {
+        "response": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "inner_nodes": [
+    {
+      "id": "llm",
+      "type": "LLM",
+      "params": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are an expert summarizer. Given the input text, produce a clear and structured summary.\n\nYour output MUST follow this format:\n\n## Summary\nA 2-3 sentence overview of the content.\n\n## Key Points\n- Point 1\n- Point 2\n- Point 3\n(include all important points)\n\n## Conclusion\nA 1-2 sentence takeaway or conclusion from the material.\n\nBe concise but thorough. Preserve important details, numbers, and names. Do not add information that is not present in the source text."
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source_id": "input",
+      "source_key": "prompt",
+      "target_id": "llm",
+      "target_key": "prompt"
+    },
+    {
+      "source_id": "llm",
+      "source_key": "response",
+      "target_id": "output",
+      "target_key": "response"
+    }
+  ]
+}

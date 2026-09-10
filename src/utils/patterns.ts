@@ -1,10 +1,12 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { basename, extname, join } from "node:path";
 import { homedir } from "node:os";
 import { tmpdir } from "node:os";
 import ora from "ora";
 import chalk from "chalk";
-import { BUILTIN_PATTERNS, type PatternDef } from "../patterns/index.js";
+import { BUILTIN_PATTERNS, definePattern, type PatternDef } from "../patterns/index.js";
+import { parseWorkflowGraph, type WorkflowGraph } from "./workflow-graph.js";
 import { loadConfig } from "./config.js";
 import { runWorkflow, type ProgressEvent, type RunResult } from "./python.js";
 import { classifyWorkflowError } from "./errors.js";
@@ -27,20 +29,20 @@ function loadUserPattern(name: string): PatternDef | undefined {
   }
 
   const patternDir = join(USER_PATTERNS_DIR, name);
-  const systemFile = join(patternDir, "system.md");
-
-  if (!existsSync(systemFile)) {
-    return undefined;
+  const workflowFile = join(patternDir, "workflow.json");
+  if (existsSync(workflowFile)) {
+    try {
+      return definePattern(name, "user", JSON.parse(readFileSync(workflowFile, "utf-8")));
+    } catch (err) {
+      throw new Error(`Cannot load task ${name} from ${workflowFile}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
+  // Import legacy text prompts at the boundary; execution uses a graph everywhere.
+  const systemFile = join(patternDir, "system.md");
+  if (!existsSync(systemFile)) return undefined;
   const systemPrompt = readFileSync(systemFile, "utf-8").trim();
-  return {
-    id: name,
-    name: name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-    description: `User task: ${name}`,
-    category: "user",
-    systemPrompt,
-  };
+  return definePattern(name, "user", legacyPatternWorkflow(systemPrompt), true);
 }
 
 function listUserPatterns(): PatternDef[] {
@@ -84,12 +86,7 @@ export function loadPattern(name: string): PatternDef | undefined {
 
 // ── Workflow Generation ────────────────────────────────────
 
-export function patternToWorkflow(
-  pattern: PatternDef,
-  modelOverride?: string
-): Record<string, unknown> {
-  const config = loadConfig();
-  const model = modelOverride || pattern.model || config.default_model || "gpt-4o-mini";
+function legacyPatternWorkflow(systemPrompt: string): WorkflowGraph {
   return {
     input_node: {
       id: "input",
@@ -114,8 +111,8 @@ export function patternToWorkflow(
         id: "llm",
         type: "LLM",
         params: {
-          model,
-          system_prompt: pattern.systemPrompt,
+          model: "gpt-4o-mini",
+          system_prompt: systemPrompt,
         },
       },
     ],
@@ -134,6 +131,36 @@ export function patternToWorkflow(
       },
     ],
   };
+}
+
+/** Clone the canonical graph; never flatten multi-node tasks into a prompt. */
+export function patternToWorkflow(
+  pattern: PatternDef,
+  modelOverride?: string
+): WorkflowGraph {
+  const workflow = structuredClone(parseWorkflowGraph(pattern.workflow));
+  const model = modelOverride || pattern.model ||
+    (pattern.useDefaultModel ? loadConfig().default_model : undefined);
+  if (model) {
+    for (const node of workflow.inner_nodes) {
+      if (node.type === "LLM") node.params.model = model;
+    }
+  }
+  return workflow;
+}
+
+/** The text-task facade uses prompt/response; richer inputs run as workflow files. */
+export function validatePatternInput(pattern: PatternDef): void {
+  const fields = pattern.workflow.input_node.params.fields;
+  const extraRequired = Object.entries(fields)
+    .filter(([name, field]) => name !== "prompt" && !("default" in field))
+    .map(([name]) => name);
+  if (fields.prompt?.type !== "string" || extraRequired.length > 0) {
+    throw new Error(`Task ${pattern.id} requires named workflow inputs. Run its workflow.json file with --input key=value.`);
+  }
+  if (pattern.workflow.output_node.params.fields.response?.type !== "string") {
+    throw new Error(`Task ${pattern.id} does not declare a string response output. Run its workflow.json file with --input key=value to keep its structured output.`);
+  }
 }
 
 // ── I/O Utilities ──────────────────────────────────────────
@@ -210,11 +237,14 @@ export async function runPattern(
   inputText: string,
   options: RunPatternOptions = {}
 ): Promise<string> {
+  validatePatternInput(pattern);
   const workflow = patternToWorkflow(pattern, options.model);
-  const tempFile = join(tmpdir(), `ace-pattern-${pattern.id}-${Date.now()}.json`);
+  const tempFile = join(tmpdir(), `ace-pattern-${pattern.id}-${randomUUID()}.json`);
 
+  let created = false;
   try {
-    writeFileSync(tempFile, JSON.stringify(workflow, null, 2), "utf-8");
+    writeFileSync(tempFile, JSON.stringify(workflow, null, 2), { encoding: "utf-8", mode: 0o600, flag: "wx" });
+    created = true;
 
     const result: RunResult = await runWorkflow(
       pythonPath,
@@ -245,8 +275,7 @@ export async function runPattern(
   } finally {
     // Clean up temp file (best effort)
     try {
-      const { unlinkSync } = await import("node:fs");
-      unlinkSync(tempFile);
+      if (created) unlinkSync(tempFile);
     } catch {
       // Ignore cleanup failures
     }

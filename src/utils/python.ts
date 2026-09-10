@@ -257,7 +257,7 @@ function providerEnvironment(): NodeJS.ProcessEnv {
 export async function runWorkflow(
   pythonPath: string,
   filePath: string,
-  input: Record<string, string>,
+  input: Record<string, unknown>,
   options: RunOptions = {}
 ): Promise<RunResult> {
   const args = ["-m", "aceteam_nodes.cli", "run", filePath, "--input", JSON.stringify(input), "--verbose"];
