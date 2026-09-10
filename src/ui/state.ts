@@ -45,6 +45,7 @@ export type WorkspaceAction =
   | { type: "navigate"; screen: WorkspaceScreen; returnTo?: WorkspaceScreen; selectedId?: string; input?: string }
   | { type: "select"; index: number }
   | { type: "input"; value: string }
+  | { type: "append-input"; value: string }
   | { type: "provider"; provider: ProviderInfo }
   | { type: "workflow-inputs"; path: string; fields: WorkflowInputField[] }
   | { type: "workflow-value"; field: string; include: boolean; value?: unknown }
@@ -63,6 +64,7 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
       return { ...state, screen: action.screen, returnTo: action.returnTo ?? state.screen, selected: 0, selectedId: action.selectedId, input: action.input ?? "", error: undefined, formError: undefined };
     case "select": return { ...state, selected: Math.max(0, action.index) };
     case "input": return { ...state, input: action.value, error: undefined, formError: undefined };
+    case "append-input": return { ...state, input: state.input + action.value, error: undefined, formError: undefined };
     case "provider": return { ...state, provider: action.provider, providerReady: true };
     case "workflow-inputs": return { ...state, screen: "workflow-values", returnTo: "workflow", selected: 0, input: "", workflowPath: action.path, workflowFields: action.fields, workflowValues: {}, formError: undefined };
     case "workflow-value": {

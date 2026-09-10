@@ -3,6 +3,7 @@ import { Box, Text } from "ink";
 import type { TemplateMetadata } from "../../templates/index.js";
 import { getWorkflowInputFields } from "../../utils/workflow-graph.js";
 import { sanitizeTerminalText } from "../terminal.js";
+import { MarkdownOutput, type MarkdownPhysicalLine } from "./MarkdownOutput.js";
 import { workflowFieldType, workflowInputFields } from "../workflow-form.js";
 
 export function filterLocalTemplates(templates: TemplateMetadata[], query: string): TemplateMetadata[] {
@@ -12,34 +13,50 @@ export function filterLocalTemplates(templates: TemplateMetadata[], query: strin
     .some((value) => value.toLowerCase().includes(normalized)));
 }
 
-export function LocalTemplateList({ templates, selected, query }: { templates: TemplateMetadata[]; selected: number; query: string }): React.JSX.Element {
+type TemplateEntry = { kind: "category"; name: string } | { kind: "template"; template: TemplateMetadata; index: number };
+
+export function LocalTemplateList({ templates, selected, query, width, maxRows }: { templates: TemplateMetadata[]; selected: number; query: string; width: number; maxRows: number }): React.JSX.Element {
+  const entries: TemplateEntry[] = [];
   let previousCategory = "";
-  return <Box flexDirection="column">
-    <Text bold>Local workflow templates</Text>
-    <Text>Filter: <Text color="cyan">{sanitizeTerminalText(query)}▌</Text></Text>
-    {templates.length === 0 && <Text color="yellow">No local templates match this filter.</Text>}
-    {templates.map((template, index) => {
-      const category = template.category !== previousCategory ? template.category : undefined;
-      previousCategory = template.category;
-      return <Box key={template.id} flexDirection="column">
-        {category && <Text bold dimColor>{sanitizeTerminalText(category.toUpperCase())}</Text>}
-        <Text color={index === selected ? "cyan" : undefined}>{index === selected ? "❯ " : "  "}{sanitizeTerminalText(template.name)} <Text dimColor>— {sanitizeTerminalText(template.description)}</Text></Text>
-      </Box>;
-    })}
+  templates.forEach((template, index) => {
+    if (template.category !== previousCategory) entries.push({ kind: "category", name: template.category });
+    entries.push({ kind: "template", template, index });
+    previousCategory = template.category;
+  });
+  const selectedEntry = Math.max(0, entries.findIndex((entry) => entry.kind === "template" && entry.index === selected));
+  const entryRows = Math.max(1, maxRows - 2);
+  const offset = Math.min(Math.max(0, selectedEntry - Math.floor(entryRows / 2)), Math.max(0, entries.length - entryRows));
+  const visible = entries.slice(offset, offset + entryRows);
+
+  return <Box flexDirection="column" width={width}>
+    <Text bold wrap="truncate-end">Local workflow templates</Text>
+    <Text wrap="truncate-end">Filter: <Text color="cyan">{sanitizeTerminalText(query)}▌</Text></Text>
+    {templates.length === 0 && <Text color="yellow" wrap="truncate-end">No local templates match this filter.</Text>}
+    {visible.map((entry, index) => entry.kind === "category"
+      ? <Text key={String(offset + index) + ":category"} bold dimColor wrap="truncate-end">{sanitizeTerminalText(entry.name.toUpperCase())}</Text>
+      : <Text key={entry.template.id} color={entry.index === selected ? "cyan" : undefined} wrap="truncate-end">
+          {entry.index === selected ? "❯ " : "  "}{sanitizeTerminalText(entry.template.name)} <Text dimColor>— {sanitizeTerminalText(entry.template.description)}</Text>
+        </Text>)}
   </Box>;
 }
 
-export function LocalTemplateDetail({ template }: { template: TemplateMetadata }): React.JSX.Element {
+export function localTemplateDetailText(template: TemplateMetadata): string {
   const fields = workflowInputFields(getWorkflowInputFields(template.workflow));
-  return <Box flexDirection="column">
-    <Text bold>{sanitizeTerminalText(template.name)}</Text>
-    <Text>{sanitizeTerminalText(template.description)}</Text>
-    <Text dimColor>Category: {sanitizeTerminalText(template.category)} · {template.workflow.inner_nodes.length} node{template.workflow.inner_nodes.length === 1 ? "" : "s"}</Text>
-    {template.runtimeWarning && <Box marginTop={1}><Text color="yellow">Warning: {sanitizeTerminalText(template.runtimeWarning)}</Text></Box>}
-    <Box marginTop={1} flexDirection="column">
-      <Text bold>Input schema</Text>
-      {fields.length === 0 && <Text dimColor>No inputs</Text>}
-      {fields.map((field) => <Text key={field.name}>• {sanitizeTerminalText(field.schema.title || field.name)} <Text dimColor>({workflowFieldType(field)}{field.required ? ", required" : ""}{"default" in field.schema ? `, default ${JSON.stringify(field.schema.default)}` : ""})</Text>{field.schema.description ? ` — ${sanitizeTerminalText(field.schema.description)}` : ""}</Text>)}
-    </Box>
-  </Box>;
+  const lines = [
+    "# " + template.name,
+    template.description,
+    "Category: " + template.category + " · " + String(template.workflow.inner_nodes.length) + " node" + (template.workflow.inner_nodes.length === 1 ? "" : "s"),
+    ...(template.runtimeWarning ? ["⚠ " + template.runtimeWarning] : []),
+    "## Input schema",
+    ...(fields.length === 0 ? ["No inputs"] : fields.map((field) => {
+      const requirement = "default" in field.schema ? "default " + String(JSON.stringify(field.schema.default)) : "required";
+      const description = field.schema.description ? " — " + field.schema.description : "";
+      return "- " + (field.schema.title || field.name) + " (" + workflowFieldType(field) + " · " + requirement + ")" + description;
+    })),
+  ];
+  return lines.join("\n");
+}
+
+export function LocalTemplateDetail({ template, width, maxRows, offset, physical }: { template: TemplateMetadata; width: number; maxRows: number; offset: number; physical?: readonly MarkdownPhysicalLine[] }): React.JSX.Element {
+  return <MarkdownOutput physical={physical} value={localTemplateDetailText(template)} width={width} offset={offset} maxLines={maxRows} />;
 }
