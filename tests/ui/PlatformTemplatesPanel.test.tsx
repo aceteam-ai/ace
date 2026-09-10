@@ -24,12 +24,16 @@ async function enter(service = new SyntheticPlatformTemplates(), columns = 80, r
   await tick(); expect(service.listCalls).toEqual([]);
   await press(view, "\u001b"); for (let i = 0; i < 5; i++) await press(view, "j"); await press(view, "\r");
   await vi.waitFor(() => expect(service.listCalls).toHaveLength(1));
+  await vi.waitFor(() => expect(view.lastFrame()).toContain("[General]"));
   return { service, view, panel };
 }
 async function inputs(view: ReturnType<typeof render>) {
-  await press(view, "summary"); await press(view, "\r");
+  await press(view, "summary");
+  await vi.waitFor(() => expect(view.lastFrame()).toContain("1 templates"));
+  await press(view, "\r");
   await vi.waitFor(() => expect(view.lastFrame()).toContain("Selected version: 3"));
   await press(view, "\r");
+  await vi.waitFor(() => expect(view.lastFrame()).toContain("Type: string"));
 }
 async function defaults(view: ReturnType<typeof render>) { for (let i = 0; i < 3; i++) await press(view, "\r"); }
 async function readAll(view: ReturnType<typeof render>, marker: string) {
@@ -46,6 +50,13 @@ describe("platform templates in the shared terminal", () => {
       const view = render(<App service={workspaceService} panels={[panel]} />); await tick(); await press(view, "\u001b");
       expect(view.lastFrame()).toContain("Platform templates"); expect(create).not.toHaveBeenCalled();
     } finally { create.mockRestore(); }
+  });
+  it("waits for the asynchronous catalog to render before selecting a template", async () => {
+    const service = new SyntheticPlatformTemplates(); const list = service.list.bind(service);
+    service.list = async (options) => { const catalog = await list(options); await new Promise((resolve) => setTimeout(resolve, 100)); return catalog; };
+    const { view } = await enter(service); await inputs(view);
+    expect(service.getCalls).toHaveLength(1); expect(service.getCalls[0].summary).toMatchObject({ title: "Synthetic summary", versionNumber: 3 });
+    expect(service.runCalls).toEqual([]);
   });
   it("loads only on entry and filters grouped metadata without starting runtime or execution", async () => {
     const { service, view } = await enter();
