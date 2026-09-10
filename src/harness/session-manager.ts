@@ -55,6 +55,8 @@ export class NativeSessionManager {
     return managed;
   }
 
+  get adapterIds(): readonly string[] { return Object.keys(this.options.adapters); }
+
   async listCandidates(workspace: string): Promise<SessionCandidate[]> {
     const records = await this.store.list();
     const current = await captureWorkspaceIdentity(workspace);
