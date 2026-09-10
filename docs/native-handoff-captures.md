@@ -9,6 +9,9 @@ and confirmation at 48×12, then changed the source file before confirming twice
 Exactly one new Claude session received exactly the original reviewed text.
 The native mode appeared after delayed identity confirmation, no approval was
 answered, and an unsupported fixture interrupt caused no adapter call.
+A follow-up run also verified that Enter without a selected approval choice did
+nothing; explicitly selecting `allow_once` completed the local turn and returned
+the Claude session to Ready.
 
 ```text
 AceTeam                           v0.3.0
