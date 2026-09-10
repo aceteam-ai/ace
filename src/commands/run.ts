@@ -200,6 +200,12 @@ export const runCommand = new Command("run")
         Boolean(options.file || options.inputDir)
       ));
 
+      if (options.remote && !isWorkflowFile(patternName)) {
+        output.error("--remote currently supports workflow .json files only.");
+        process.exitCode = 1;
+        return;
+      }
+
       // ── Workflow mode (.json file) ─────────────────────
       if (isWorkflowFile(patternName)) {
         if (!existsSync(patternName)) {

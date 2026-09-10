@@ -112,6 +112,41 @@ describe("runCommand", () => {
 });
 
 describe("named graph input validation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("rejects --remote named tasks before starting local execution", async () => {
+    const { ensurePython } = await import("../../src/utils/ensure-python.js");
+    const { runWorkflow } = await import("../../src/utils/python.js");
+    const { loadConfig } = await import("../../src/utils/config.js");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const previousExitCode = process.exitCode;
+    try {
+      await runCommand.parseAsync([
+        "node",
+        "ace",
+        "summarize",
+        "Synthetic text",
+        "--remote",
+      ]);
+
+      expect(process.exitCode).toBe(1);
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining("workflow .json files")
+      );
+      expect(ensurePython).not.toHaveBeenCalled();
+      expect(loadConfig).not.toHaveBeenCalled();
+      expect(runWorkflow).not.toHaveBeenCalled();
+    } finally {
+      process.exitCode = previousExitCode;
+      runCommand.setOptionValue("remote", undefined);
+      write.mockRestore();
+      error.mockRestore();
+    }
+  });
+
   it("rejects required named inputs before bootstrapping Python", async () => {
     const { existsSync, readFileSync } = await import("node:fs");
     const { ensurePython } = await import("../../src/utils/ensure-python.js");
