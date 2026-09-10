@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import { initCommand } from "./commands/init.js";
 import { workflowCommand } from "./commands/workflow.js";
+import { templatesCommand } from "./commands/templates.js";
 import { fabricCommand } from "./commands/fabric.js";
 import { runCommand } from "./commands/run.js";
 import { loginCommand, logoutCommand } from "./commands/login.js";
@@ -11,7 +12,7 @@ import { addCompletionCommands } from "./commands/completion.js";
 import { agentCommand } from "./commands/agent.js";
 import { beginLegacyOutput, finishLegacyOutput } from "./utils/legacy-output.js";
 import { CliError } from "./utils/control-plane.js";
-
+ 
 function addOutputOptions(command: Command): void {
   const options = command.options.map((option) => option.long);
   if (!options.includes("--json")) command.option("--json", "Output JSON");
@@ -44,6 +45,7 @@ export function createProgram(): Command {
   program.addCommand(initCommand);
   program.addCommand(runCommand);
   program.addCommand(workflowCommand);
+  program.addCommand(templatesCommand);
   program.addCommand(fabricCommand);
   program.addCommand(loginCommand);
   program.addCommand(logoutCommand);
