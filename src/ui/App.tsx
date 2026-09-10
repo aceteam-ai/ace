@@ -165,8 +165,12 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
             begin("Workflow output", (signal) => service.executeWorkflow(state.workflowPath!, values, { signal, onProgress: (progress) => dispatch({ type: "progress", progress }) }));
           } else dispatch({ type: "workflow-value", field, value });
         } else if (state.screen === "settings-edit") {
-          service.updateDefaultModel(value);
-          dispatch({ type: "result", title: "Settings saved", output: `Default model: ${value}` });
+          try {
+            service.updateDefaultModel(value);
+            dispatch({ type: "result", title: "Settings saved", output: `Default model: ${value}` });
+          } catch (error) {
+            dispatch({ type: "error", message: error instanceof Error ? error.message : String(error) });
+          }
         } else {
           try { dispatch({ type: "result", title: "Workflow created", output: service.createWorkflow(state.selectedId!, value) }); }
           catch (error) { dispatch({ type: "error", message: error instanceof Error ? error.message : String(error) }); }
@@ -224,7 +228,7 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
     if (state.screen === "running") return <Box flexDirection="column"><Text bold color="cyan">Working…</Text>{state.progress.map((item, index) => <Text key={index}>{index === state.progress.length - 1 ? "●" : "✓"} {sanitizeTerminalText(item.message)}</Text>)}</Box>;
     if (state.screen === "settings") {
       const config = service.getConfig();
-      return <Box flexDirection="column"><Text bold>Settings</Text><Text>Default model  {config.default_model ?? "gpt-4o-mini"}</Text><Text dimColor>Press e to edit the default model.</Text><Text>Local runtime {config.python_path ? "managed" : "installed on first live run"}</Text><Text>Fabric        {config.fabric_api_key ? "connected for remote workflows" : "not connected"}</Text></Box>;
+      return <Box flexDirection="column"><Text bold>Settings</Text><Text>Default model  {sanitizeTerminalText(config.default_model ?? "gpt-4o-mini")}</Text><Text dimColor>Press e to edit the default model.</Text><Text>Local runtime {config.python_path ? "managed" : "installed on first live run"}</Text><Text>Fabric        {config.fabric_api_key ? "connected for remote workflows" : "not connected"}</Text></Box>;
     }
     if (state.screen === "provider") return <Box flexDirection="column"><Text bold>Provider setup</Text><Text>OpenAI     export OPENAI_API_KEY=…</Text><Text>Anthropic  export ANTHROPIC_API_KEY=…</Text><Text>Ollama     ollama serve</Text><Text>AceTeam    ace login (remote workflows)</Text></Box>;
     if (state.screen.startsWith("panel:")) {
