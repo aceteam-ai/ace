@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { providerEvents } from "./fixtures/provider-events.js";
 import {
   FakeNativeHarnessAdapter,
   type NativeHarnessEvent,
@@ -709,4 +710,60 @@ describe("FakeNativeHarnessAdapter", () => {
     expect(events.filter((event) => event.type === "conversation.message")).toEqual([expect.objectContaining({ text: "New input", nativeTurnId: "native-input-reentry:turn-2" })]);
   });
 
+});
+
+
+describe("local turn identity", () => {
+  it("runs successive local-ID turns without claiming a native-minted ID", async () => {
+    const adapter = new FakeNativeHarnessAdapter({ turnIdentity: "local" });
+    const session = await startSession(adapter, "local-conversation");
+    const events: NativeHarnessEvent[] = [];
+    adapter.observe({ type: "session.observe", session }, (event) => events.push(event));
+    await adapter.sendInput({ type: "session.input", session, input: "First explicit turn" });
+    const first = events.find((event) => event.type === "turn.started")!;
+    expect(first.turnId).toBe("local-conversation:turn-1");
+    expect(first.nativeTurnId).toBeUndefined();
+    expect(adapter.emit(session, { type: "turn.completed", nativeTurnId: first.turnId!, outcome: "completed" })).toMatchObject({ status: "rejected" });
+    expect(adapter.emit(session, { type: "turn.completed", turnId: first.turnId!, outcome: "completed" })).toMatchObject({ status: "ok" });
+    expect(await adapter.sendInput({ type: "session.input", session, input: "Second explicit turn" })).toMatchObject({ status: "ok" });
+    expect(adapter.emit(session, { type: "turn.completed", turnId: first.turnId!, outcome: "completed" })).toMatchObject({ status: "rejected" });
+    expect(await adapter.interrupt({ type: "session.interrupt", session })).toMatchObject({ status: "ok" });
+    expect(events.filter((event) => event.type === "turn.completed")).toEqual([
+      expect.objectContaining({ turnId: "local-conversation:turn-1", outcome: "completed" }),
+      expect.objectContaining({ turnId: "local-conversation:turn-2", outcome: "interrupted" }),
+    ]);
+    expect(events.every((event) => event.nativeTurnId === undefined)).toBe(true);
+    expect(events.at(-1)).toMatchObject({ type: "session.state", state: "ready" });
+  });
+
+  it("expires local-turn approvals before completion observers and keeps sessions terminal", async () => {
+    const adapter = new FakeNativeHarnessAdapter({ turnIdentity: "local" });
+    const session = await startSession(adapter, "local-approval");
+    const events: NativeHarnessEvent[] = [];
+    adapter.observe({ type: "session.observe", session }, (event) => events.push(event));
+    await adapter.sendInput({ type: "session.input", session, input: "Explicit input" });
+    adapter.emit(session, { type: "approval.requested", approvalId: "local-allow", prompt: "Synthetic request", choices: ["allow", "deny"] }, "local-request");
+    const result: Promise<unknown>[] = [];
+    adapter.observe({ type: "session.observe", session }, (event) => {
+      if (event.type === "turn.completed") result.push(adapter.respondToApproval({ type: "approval.respond", session, approvalId: "local-allow", decision: "allow", correlationId: "local-request" }));
+    });
+    adapter.emit(session, { type: "turn.completed", turnId: events[0].turnId!, outcome: "failed" });
+    expect(await Promise.all(result)).toEqual([expect.objectContaining({ code: "stale_approval" })]);
+    expect(events.find((event) => event.type === "approval.requested")).toMatchObject({ turnId: "local-approval:turn-1", nativeTurnId: undefined });
+    adapter.emit(session, { type: "session.error", error: { code: "synthetic", message: "Synthetic terminal failure", retryable: false } });
+    expect(await adapter.sendInput({ type: "session.input", session, input: "Must reject" })).toMatchObject({ status: "rejected" });
+  });
+});
+
+
+it.each(["codex", "claude"] as const)("accepts shared %s event fixtures without rewriting provider identities", async (adapterId) => {
+  const adapter = new FakeNativeHarnessAdapter({ adapterId, nativeSessionId: () => `synthetic-${adapterId}` });
+  const session = await startSession(adapter, `local-${adapterId}`);
+  const output: NativeHarnessEvent[] = [];
+  adapter.observe({ type: "session.observe", session }, (event) => output.push(event));
+  for (const event of providerEvents(adapterId)) expect(adapter.emit(session, event)).toMatchObject({ status: "ok" });
+  const completed = output.find((event) => event.type === "turn.completed")!;
+  expect(completed.nativeTurnId).toBe(adapterId === "codex" ? "codex-native-turn" : undefined);
+  expect(completed.turnId).toBe(adapterId === "claude" ? "ace-input-uuid" : undefined);
+  expect(output.at(-1)).toMatchObject({ type: "session.state", state: "ready" });
 });
