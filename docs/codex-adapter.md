@@ -3,8 +3,8 @@
 `CodexNativeHarnessAdapter` implements the internal harness contract from #12 for
 one local Ace-created Codex thread (#13), extended with successive explicit text
 turns by the [reviewed #14 lifecycle amendment](native-turn-lifecycle.md). It is a
-building block for the shared terminal interface in #14; this slice adds no CLI command or new
-terminal application. Existing workflow commands still use their existing path.
+building block for the [shared terminal panels](native-sessions.md) in #14.
+The panels use the existing `ace` workspace; existing workflow commands keep their existing path.
 
 ## Supported lifecycle
 
