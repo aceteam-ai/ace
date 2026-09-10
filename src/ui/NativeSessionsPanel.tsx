@@ -4,6 +4,7 @@ import wrapAnsi from "wrap-ansi";
 import type { NativeHarnessAdapter, NativeHarnessOperation } from "../harness/types.js";
 import { NativeSessionManager } from "../harness/session-manager.js";
 import { CodexNativeHarnessAdapter } from "../harness/codex.js";
+import { ClaudeNativeHarnessAdapter } from "../harness/claude.js";
 import { ManagedNativeWorkspace, nativeProviderDescription } from "./ManagedNativeWorkspace.js";
 import { NativeWorkspaceController } from "./native-workspace-controller.js";
 import { NativeSessionChooser } from "./NativeSessionChooser.js";
@@ -177,7 +178,10 @@ export function NativeSessionsPanel({ service, back, workspace: defaultWorkspace
 export type NativeSessionPanelOptions = { workspace?: string } & ({ adapter?: NativeHarnessAdapter; manager?: never } | { manager: NativeSessionManager; adapter?: never });
 export function createNativeSessionsPanel(options: NativeSessionPanelOptions = {}): WorkspacePanel {
   if (options.adapter && options.manager) throw new Error("Use a managed adapter factory or a standalone test adapter, not both.");
-  const manager = options.manager ?? (options.adapter ? undefined : new NativeSessionManager({ adapters: { codex: (store) => new CodexNativeHarnessAdapter({ sessionStore: store }) } }));
+  const manager = options.manager ?? (options.adapter ? undefined : new NativeSessionManager({ adapters: {
+    codex: (store) => new CodexNativeHarnessAdapter({ sessionStore: store }),
+    claude: (store, hooks) => new ClaudeNativeHarnessAdapter({ sessionStore: store, onNativeSessionConfirmed: hooks.onNativeSessionConfirmed }),
+  } }));
   if (manager) {
     const controller = new NativeWorkspaceController(manager);
     return {
