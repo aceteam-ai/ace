@@ -63,3 +63,30 @@ describe("native presentation state", () => {
     expect(state.messages[0].text).toBe("21");
   });
 });
+
+it.each(["codex", "claude"] as const)("renders shared %s fixtures with honest provider turn IDs and native permissions", async (provider) => {
+  const { providerEvents } = await import("../harness/fixtures/provider-events.js");
+  const events = providerEvents(provider);
+  let state: NativeSessionState = { ...initialNativeSessionState(), phase: "ready", identity: { adapterId: provider, sessionId: `local-${provider}` } };
+  for (const next of events.slice(0, 3)) state = reduceNativeEvent(state, next);
+  expect(state.identity?.nativeSessionId).toBe(`synthetic-${provider}`);
+  expect(state.nativeTurnId).toBe(provider === "codex" ? "codex-native-turn" : undefined);
+  expect(state.turnId).toBe(provider === "claude" ? "ace-input-uuid" : undefined);
+  expect(nativePermissionSummary(state)).toContain(provider === "codex" ? "Approval: on-request" : "Claude mode: default");
+  if (provider === "claude") expect(nativePermissionSummary(state)).not.toContain("Sandbox:");
+  for (const next of events.slice(3)) state = reduceNativeEvent(state, next);
+  expect(state.phase).toBe("ready"); expect(state.messages[0].text).toBe("Synthetic response");
+});
+
+it("associates local turn approvals and native structured patches without a made-up native turn ID", () => {
+  let state: NativeSessionState = { ...initialNativeSessionState(), phase: "ready", identity: { adapterId: "claude", sessionId: "local" } };
+  const base = { adapterId: "claude", sessionId: "local", turnId: "local-turn", timestamp: "2026-01-01T00:00:00Z" };
+  state = reduceNativeEvent(state, { ...base, sequence: 1, type: "turn.started" });
+  state = reduceNativeEvent(state, { ...base, sequence: 2, type: "approval.requested", approvalId: "request", prompt: "Edit?", choices: ["allow_once", "deny"], nativeDetails: { toolName: "Edit", input: { file_path: "example.ts" }, reason: "Native rule" } });
+  expect(state.approvals[0]).toMatchObject({ turnId: "local-turn" });
+  expect(state.approvals[0].details).toContain("file_path");
+  state = reduceNativeEvent(state, { ...base, sequence: 3, type: "change.reported", changeId: "edit", files: [{ path: "example.ts", kind: "modified" }], nativeDetails: { structuredPatch: [{ oldStart: 1, lines: ["-before", "+after"] }] } });
+  expect(state.changes[0].patch).toContain("+after");
+  state = reduceNativeEvent(state, { ...base, sequence: 4, type: "turn.completed", outcome: "completed" });
+  expect(state.approvals).toEqual([]); expect(state.phase).toBe("waiting_for_approval");
+});

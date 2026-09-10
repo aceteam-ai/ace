@@ -24,7 +24,7 @@ describe("native session panel", () => {
     const start = vi.spyOn(adapter, "start"); const send = vi.spyOn(adapter, "sendInput");
     expect(view.lastFrame()).toContain("Native coding session");
     expect(start).not.toHaveBeenCalled();
-    await key(view, "\r"); expect(view.lastFrame()).toContain("Codex workspace directory");
+    await key(view, "\r"); expect(view.lastFrame()).toContain("synthetic-codex workspace directory");
     expect(start).not.toHaveBeenCalled(); await key(view, "\r");
     expect(start).toHaveBeenCalledOnce(); expect(service.getSnapshot().phase).toBe("ready");
     await key(view, "\r"); await key(view, "why?q");
