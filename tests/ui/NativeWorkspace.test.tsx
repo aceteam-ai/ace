@@ -21,7 +21,7 @@ describe("native panel in the shared workspace", () => {
     const send = vi.spyOn(adapter, "sendInput"); const view = render(<App service={service} panels={[panel]} />);
     const press = async (value: string) => { view.stdin.write(value); await tick(); };
     await tick(); await press("\u001b"); for (let i = 0; i < 5; i++) await press("j"); await press("\r");
-    expect(view.lastFrame()).toContain("Codex manages its own sign-in and permissions");
+    expect(view.lastFrame()).toContain("synthetic-codex manages its own sign-in and permissions");
     expect(view.lastFrame()).not.toContain("No provider configured");
     await press("\r"); await press("\r"); await press("\r"); await press("why?q");
     expect(view.lastFrame()).toContain("why?q");

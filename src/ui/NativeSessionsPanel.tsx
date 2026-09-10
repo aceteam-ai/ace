@@ -4,10 +4,12 @@ import wrapAnsi from "wrap-ansi";
 import type { NativeHarnessAdapter, NativeHarnessOperation } from "../harness/types.js";
 import { NativeSessionManager } from "../harness/session-manager.js";
 import { CodexNativeHarnessAdapter } from "../harness/codex.js";
+import { ManagedNativeWorkspace, nativeProviderDescription } from "./ManagedNativeWorkspace.js";
+import { NativeWorkspaceController } from "./native-workspace-controller.js";
 import { NativeSessionChooser } from "./NativeSessionChooser.js";
 import type { WorkspacePanel } from "./App.js";
 import { NativeSessionService } from "./native-session-service.js";
-import { nativeInlineText, nativePermissionSummary, nativeText, type NativeSessionState } from "./native-session-state.js";
+import { nativeInlineText, nativePermissionSummary, nativeProviderLabel, nativeText, type NativeSessionState } from "./native-session-state.js";
 import { sanitizeTerminalText } from "./terminal.js";
 
 const TABS = ["Conversation", "Activity", "Changes", "Approvals"] as const;
@@ -20,7 +22,7 @@ function displayLines(state: NativeSessionState, tab: number, approvalIndex: num
   if (tab === 0) return state.messages.length
     ? state.messages.flatMap((message) => [`${message.role}${message.complete ? "" : " (streaming)"}`, message.text, ""])
     : [state.connectionKind === "resumed" ? "Session resumed. Earlier conversation is not loaded. Send a new message when ready." : "No conversation output yet."];
-  if (tab === 1) return [...(state.registrationNotice ? ["Local registration", state.registrationNotice, ""] : []), "Native permissions", nativeText(state.permissionContext ?? "Not reported"), "", "Workers observed by Codex",
+  if (tab === 1) return [...(state.registrationNotice ? ["Local registration", state.registrationNotice, ""] : []), "Native permissions", nativeText(state.permissionContext ?? "Not reported"), "", "Native workers",
     ...state.workers.flatMap((worker) => [`${worker.name}: ${worker.state}`, worker.details]),
     "", "Native tool activity", ...state.tools.flatMap((tool) => [`${tool.name}: ${tool.state}`, tool.details, ""])];
   if (tab === 2) return state.changes.length ? ["Native-reported changes", ...state.changes.flatMap((change) => [
@@ -35,11 +37,14 @@ export interface NativeSessionsPanelProps {
   back: () => void;
   workspace?: string;
   manager?: NativeSessionManager;
+  initialRoute?: "choose" | "workspace";
+  chooseProvider?: () => void;
 }
 
-export function NativeSessionsPanel({ service, back, workspace: defaultWorkspace = process.cwd(), manager }: NativeSessionsPanelProps): React.JSX.Element {
+export function NativeSessionsPanel({ service, back, workspace: defaultWorkspace = process.cwd(), manager, initialRoute = "choose", chooseProvider }: NativeSessionsPanelProps): React.JSX.Element {
   const state = useSyncExternalStore(service.subscribe, service.getSnapshot, service.getSnapshot);
-  const [route, setRoute] = useState<"choose" | "workspace" | "open" | "session">(state.phase === "idle" ? "choose" : "session");
+  const [route, setRoute] = useState<"choose" | "workspace" | "open" | "session">(state.phase === "idle" || (initialRoute === "workspace" && service.canStartFresh()) ? initialRoute : "session");
+  const providerLabel = nativeProviderLabel(service.adapter.adapterId);
   const [workspace, setWorkspace] = useState(defaultWorkspace);
   const [input, setInput] = useState("");
   const [focus, setFocus] = useState<"view" | "input">("view");
@@ -79,7 +84,7 @@ export function NativeSessionsPanel({ service, back, workspace: defaultWorkspace
     if (tooSmall) { if (key.escape || value === "q") back(); return; }
     if (help) { if (key.escape || key.return || value === "?" || key.tab) setHelp(false); return; }
     if (route === "workspace" || focus === "input") {
-      if (key.escape) { route === "workspace" ? setRoute("choose") : setFocus("view"); return; }
+      if (key.escape) { route === "workspace" ? chooseProvider ? chooseProvider() : setRoute("choose") : setFocus("view"); return; }
       if (key.tab) { route === "workspace" ? setHelp(true) : setFocus("view"); return; }
       if (key.backspace || key.delete) {
         const shorten = (text: string) => [...text].slice(0, -1).join("");
@@ -109,7 +114,7 @@ export function NativeSessionsPanel({ service, back, workspace: defaultWorkspace
       if (key.return && !blocked("start")) { setRoute("workspace"); setLocalNotice(undefined); }
       return;
     }
-    if (value === "n" && ["closed", "error"].includes(state.phase)) { setRoute("choose"); return; }
+    if (value === "n" && ["closed", "error"].includes(state.phase)) { chooseProvider ? chooseProvider() : setRoute("choose"); return; }
     if (value === "x" && !blocked("dispose")) { void service.close(); return; }
     if (value === "i" && !blocked("interrupt")) { void service.interrupt(); return; }
     if (key.leftArrow) { selectTab((tab + TABS.length - 1) % TABS.length); return; }
@@ -146,12 +151,12 @@ export function NativeSessionsPanel({ service, back, workspace: defaultWorkspace
     runLocalOperation={service.runLocalOperation} back={() => setRoute("workspace")}
     start={() => { setRoute("session"); void service.start(workspace.trim()); }}
     resume={(record) => { setRoute("session"); void service.resume(record, workspace.trim()); }} />;
-  if (tooSmall) return <Box flexDirection="column"><Text bold wrap="truncate-end">Codex · {PHASE_LABELS[state.phase]}</Text><Text wrap="truncate-end">Resize to at least 40 columns × 24 rows.</Text><Text wrap="truncate-end">{state.approvals.length} approvals pending; actions paused.</Text><Text dimColor wrap="truncate-end">Esc Back  Ctrl+C Exit workspace</Text></Box>;
+  if (tooSmall) return <Box flexDirection="column"><Text bold wrap="truncate-end">{providerLabel} · {PHASE_LABELS[state.phase]}</Text><Text wrap="truncate-end">Resize to at least 40 columns × 24 rows.</Text><Text wrap="truncate-end">{state.approvals.length} approvals pending; actions paused.</Text><Text dimColor wrap="truncate-end">Esc Back  Ctrl+C Exit workspace</Text></Box>;
   if (help) return <Box flexDirection="column"><Text bold>Native session keys</Text><Text>←/→ Panels  ↑/↓ Scroll or choose  PgUp/PgDn Page</Text><Text>Enter/Tab Compose when ready  i Interrupt turn</Text><Text>Approvals: ↑/↓ explicitly choose, then Enter sends</Text><Text>[ / ] Previous/next approval  x Close session</Text><Text>Esc/q Back (session keeps running)  Ctrl+C Exit</Text><Text>While typing: ? and q are text; Tab leaves input.</Text><Text>Esc/Enter Close help</Text></Box>;
-  if (route === "choose") return <Box flexDirection="column"><Text bold>Native coding session</Text><Text color="cyan">❯ Codex</Text><Text>Uses Codex sign-in, model, and native permissions.</Text><Text>No Python setup or AceTeam account is required.</Text><Text dimColor>Enter Choose workspace  Esc Back  ? Keys</Text>{localNotice && <Text color="yellow">{nativeInlineText(localNotice)}</Text>}</Box>;
-  if (route === "workspace") return <Box flexDirection="column"><Text bold>Codex workspace directory</Text><Text wrap="truncate-start">› {nativeInlineText(workspace)}<Text inverse> </Text></Text><Text dimColor>Enter {manager ? "Choose new or saved session" : "Start new session"}  Esc Back  Tab Keys</Text>{localNotice && <Text color="yellow">{nativeInlineText(localNotice)}</Text>}</Box>;
+  if (route === "choose") return <Box flexDirection="column"><Text bold>Native coding session</Text><Text color="cyan">❯ {providerLabel}</Text><Text>{nativeProviderDescription(service.adapter.adapterId)}</Text><Text>No Python setup or AceTeam account is required.</Text><Text dimColor>Enter Choose workspace  Esc Back  ? Keys</Text>{localNotice && <Text color="yellow">{nativeInlineText(localNotice)}</Text>}</Box>;
+  if (route === "workspace") return <Box flexDirection="column"><Text bold>{providerLabel} workspace directory</Text><Text wrap="truncate-start">› {nativeInlineText(workspace)}<Text inverse> </Text></Text><Text dimColor>Enter {manager ? "Choose new or saved session" : "Start new session"}  Esc Back  Tab Keys</Text>{localNotice && <Text color="yellow">{nativeInlineText(localNotice)}</Text>}</Box>;
   return <Box flexDirection="column">
-    <Text bold>Codex · {PHASE_LABELS[state.phase]}{state.interruptPending ? " · interrupt requested" : ""}</Text>
+    <Text bold>{providerLabel} · {PHASE_LABELS[state.phase]}{state.interruptPending ? " · interrupt requested" : ""}</Text>
     <Text wrap="truncate-middle" dimColor>Session {nativeInlineText(state.identity?.sessionId ?? "closed")} · {nativeInlineText(state.workspace ?? workspace)}</Text>
     <Text wrap="truncate-end">{nativePermissionSummary(state)}</Text>
     <Text wrap="truncate-end">{width < 60 ? `${tab + 1}/4 ${TABS[tab]}  ←→ Panels` : TABS.map((label, index) => `${index === tab ? "[" : " "}${label}${index === tab ? "]" : " "}`).join(" ")}</Text>
@@ -162,7 +167,7 @@ export function NativeSessionsPanel({ service, back, workspace: defaultWorkspace
       {approval.choices.map((decision, index) => <Text key={decision} wrap="truncate-end" color={choice === index ? "cyan" : undefined}>{choice === index ? "❯" : " "} {nativeInlineText(decision)}</Text>)}
       <Text dimColor wrap="truncate-end">{approval.status === "waiting" ? "Choose with ↑/↓, then Enter confirms that decision." : "Waiting for native resolution; replies are disabled."}</Text></Box>}
     {focus === "input" && <Text color="cyan" wrap="truncate-start">› {nativeInlineText(input)}<Text inverse> </Text></Text>}
-    {state.registrationNotice && <Text color="yellow" wrap="truncate-end">Registration: {nativeInlineText(state.registrationNotice)} · details in Activity</Text>}
+    {state.registrationNotice && <Text color={state.registrationStatus === "pending" ? undefined : "yellow"} dimColor={state.registrationStatus === "pending"} wrap="truncate-end">Registration: {nativeInlineText(state.registrationNotice)} · details in Activity</Text>}
     {(localNotice || state.notice) && <Text color="yellow" wrap="truncate-end">{nativeInlineText(localNotice ?? state.notice ?? "")}</Text>}
     <Text dimColor wrap="truncate-end">{focus === "input" ? "Enter Send  Tab/Esc Panels  ? is text" : "←→ Panels  Enter Compose  i Interrupt  x Close  Esc Back  ? Keys"}</Text>
     {["closed", "error"].includes(state.phase) && <Text dimColor>n New session</Text>}
@@ -173,13 +178,21 @@ export type NativeSessionPanelOptions = { workspace?: string } & ({ adapter?: Na
 export function createNativeSessionsPanel(options: NativeSessionPanelOptions = {}): WorkspacePanel {
   if (options.adapter && options.manager) throw new Error("Use a managed adapter factory or a standalone test adapter, not both.");
   const manager = options.manager ?? (options.adapter ? undefined : new NativeSessionManager({ adapters: { codex: (store) => new CodexNativeHarnessAdapter({ sessionStore: store }) } }));
-  let service: NativeSessionService;
-  const adapter = options.adapter ?? manager!.createAdapter("codex", { onNotice: (notice) => service?.reportRegistrationNotice(notice) });
-  service = new NativeSessionService(adapter);
+  if (manager) {
+    const controller = new NativeWorkspaceController(manager);
+    return {
+      id: "native", title: "Native coding session", description: "Native conversation, activity, changes, approvals, and reviewed handoff",
+      providerLabel: "Native providers manage their own authentication and permissions",
+      dispose: () => controller.dispose(),
+      render: ({ back }) => <ManagedNativeWorkspace controller={controller} workspace={options.workspace} back={back} />,
+    };
+  }
+  const service = new NativeSessionService(options.adapter!);
+  const label = nativeProviderLabel(options.adapter!.adapterId);
   return {
-    id: "native", title: "Native coding session", description: "Codex conversation, activity, changes, and approvals",
-    providerLabel: "Codex manages its own sign-in and permissions",
+    id: "native", title: "Native coding session", description: `${label} conversation, activity, changes, and approvals`,
+    providerLabel: `${label} manages its own sign-in and permissions`,
     dispose: () => service.dispose(),
-    render: ({ back }) => <NativeSessionsPanel service={service} workspace={options.workspace} manager={manager} back={back} />,
+    render: ({ back }) => <NativeSessionsPanel service={service} workspace={options.workspace} back={back} />,
   };
 }
