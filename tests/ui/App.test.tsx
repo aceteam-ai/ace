@@ -137,7 +137,7 @@ describe("terminal workspace", () => {
   it("collects declared workflow inputs before starting a live run", async () => {
     const executeWorkflow = vi.fn(async () => "done");
     const fake = service({
-      getWorkflowInputs: vi.fn(() => ["prompt"]),
+      getWorkflowInputs: vi.fn(() => [{ name: "prompt", schema: { type: "string" }, required: true }]),
       executeWorkflow,
     });
     const view = render(<App service={fake} />);
@@ -152,12 +152,55 @@ describe("terminal workspace", () => {
     await tick();
     view.stdin.write("\r");
     await tick();
-    expect(view.lastFrame()).toContain("Input: prompt");
+    expect(view.lastFrame()).toContain("prompt");
     view.stdin.write("hello");
     await tick();
     view.stdin.write("\r");
     await tick();
     expect(executeWorkflow).toHaveBeenCalledWith("flow.json", { prompt: "hello" }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  });
+
+
+  it("filters local templates and shows details, input schema, and runtime warnings", async () => {
+    const view = render(<App service={service()} />);
+    await tick();
+    view.stdin.write("\u001b"); await tick();
+    view.stdin.write("j"); await tick();
+    view.stdin.write("j"); await tick();
+    view.stdin.write("\r"); await tick();
+    view.stdin.write("api"); await tick();
+    expect(view.lastFrame()).toContain("API to LLM");
+    expect(view.lastFrame()).not.toContain("Hello LLM");
+    view.stdin.write("\r"); await tick();
+    expect(view.lastFrame()).toContain("Input schema");
+    expect(view.lastFrame()).toContain("URL");
+    expect(view.lastFrame()).toContain("Authoring example only");
+  });
+
+  it("keeps typed workflow validation errors on the form and submits JSON values/defaults", async () => {
+    const executeWorkflow = vi.fn(async () => "# Result\n- complete");
+    const fake = service({
+      getWorkflowInputs: () => [
+        { name: "count", schema: { type: "integer", description: "How many" }, required: true },
+        { name: "enabled", schema: { type: "boolean", default: true }, required: false },
+        { name: "note", schema: { type: "string", required: false }, required: false },
+      ],
+      executeWorkflow,
+    });
+    const view = render(<App service={fake} />);
+    await tick(); view.stdin.write("\u001b"); await tick(); view.stdin.write("j"); await tick(); view.stdin.write("\r"); await tick();
+    view.stdin.write("flow.json"); await tick(); view.stdin.write("\r"); await tick();
+    view.stdin.write("wrong"); await tick(); view.stdin.write("\r"); await tick();
+    expect(view.lastFrame()).toContain("valid JSON");
+    for (let i = 0; i < 5; i++) { view.stdin.write("\u007f"); await tick(); }
+    view.stdin.write("3"); await tick(); view.stdin.write("\r"); await tick();
+    expect(view.lastFrame()).toContain("Enter uses true");
+    view.stdin.write("\r"); await tick();
+    expect(view.lastFrame()).toContain("optional");
+    view.stdin.write("\r"); await tick();
+    expect(executeWorkflow).toHaveBeenCalledWith("flow.json", { count: 3, enabled: true }, expect.any(Object));
+    expect(view.lastFrame()).toContain("Result");
+    expect(view.lastFrame()).toContain("• complete");
   });
 
   it("leaves Enter handling to extension panels", async () => {
