@@ -1,0 +1,37 @@
+# Optional collaboration: contract review before implementation
+
+Status: design proposal for review. No subscriber, native external-intake operation, or inbox is implemented by this document. The public issues require a reviewed provider contract before implementation. A fake endpoint or generic SSE client cannot establish a supported provider protocol. Initial local-session work remains useful without these integrations. [#18](https://github.com/aceteam-ai/ace/issues/18), [#19](https://github.com/aceteam-ai/ace/issues/19), [#20](https://github.com/aceteam-ai/ace/issues/20).
+
+### S6 / #18: provider delivery contract checklist
+
+An accepted public artifact needs a version identifier and synthetic wire examples for all of:
+
+- Subscription URL/method, supported authorization flow and recipient scopes; token renewal/revocation and forbidden cross-recipient access. No credentials in URLs, native credential extraction, or inferred recipient bindings.
+- Envelope type/version, message ID stability, bounded content sizes, authenticated sender/recipient identity versus display text, original conversation/reply references, and integrity/source of each provenance field.
+- Opaque cursor scope, order guarantees, replay window/retention, duplicate/out-of-order behavior, reconnect and cursor-expiry recovery, and whether missed content can be fetched by message ID.
+- Server-authoritative ownership across two consumers and other delivery paths: consumer identity, lease/claim behavior, ownership loss, and which consumer may ACK.
+- ACK endpoint, exact meaning and timing, idempotency and failure reconciliation. Transport receipt, durable journal write, harness intake, and explicit human handoff acceptance are different facts.
+- Reply/send commands, authorization, idempotency key lifetime and status lookup, stale conversation handling, and definitive versus ambiguous failures.
+- Disconnect/rate/backlog/expiry errors, retry guidance, and negotiated unavailable capabilities.
+
+Once accepted, proposed client files are `src/collaboration/types.ts`, `client.ts`, `subscriber.ts`, `journal.ts`, plus synthetic event-server tests. Do not add transport-specific fields to native harness commands. Bind subscriptions only to explicitly selected eligible Ace-created session records. Keep a restrictive, atomic journal containing identity mappings, message IDs, cursor, and outcomes. If message body is not durable locally, the contract must provide replay/refetch before advancing ACK; otherwise a cursor can outlive the only copy of undelivered content.
+
+Persist an attempted submission with a correlation key before sending it. After a crash with no definitive response, restore `unknown`, reconcile when supported, or pause for user resolution. No automatic retry of unknown intake and no exactly-once inference claim. Deduplication retention must cover the replay window or the provider must offer an authoritative reconciliation strategy. Atomic replacement alone is insufficient for concurrent writers; one owner or a lock is required.
+
+Fake contract tests must include initial connect, duplicate/replay/disconnect, out-of-order events, expired cursor, full queue, ACK failure, journal failure/crash, two consumers, binding mismatch, revocation, and ambiguous native intake. Subscriber teardown must close its stream, timers, and pending waits. These fixtures should follow the accepted provider contract, not invent it.
+
+### S7 / #19: external native intake evidence
+
+Current official app-server docs establish a candidate mechanism: `turn/start` with empty `input` and `toolOutput` containing a nonempty name, optional namespace, and string/content output. It remains tool output, appears as `functionCallOutput` in events/history, and queues into an active regular turn. `turn/steer` instead adds user input and is not an authority-preserving fallback. The CLI can generate version-specific schemas. Offline-generated schemas for the tested Codex CLI 0.153.4 include the candidate `toolOutput` input. No credentialed model run or live history-provenance check has been performed. These docs establish a documented feature, not its presence in every installed binary. [Official external intake](https://learn.chatgpt.com/docs/app-server#start-a-turn), [official protocol schema generation](https://learn.chatgpt.com/docs/app-server#message-schema).
+
+Required acceptance evidence: tested native version and generated `TurnStartParams`/`functionCallOutput` shapes; initialization/capability behavior; real response/notification correlation for idle and busy delivery; behavior while approval is pending; turn-budget/pause race semantics; and the supported way to reconcile a lost response. Schema presence alone cannot prove genuine idle model intake, persisted external provenance, or exactly-once acceptance. An optional separately authorized synthetic native smoke can prove those first two facts; otherwise report mock-only evidence honestly. Do not read live transcripts or copy native auth.
+
+Automatic policy starts off, is explicit per running managed session, and is rechecked under the same lifecycle lock immediately before submission. Pausing keeps queued messages. External content cannot alter policy, approve a tool, spawn/resume a process, or transfer user authority. Native exit or stale mapping queues the message; it never launches another process. Supported native method rejection leaves manual review available without substituting a user prompt. A lost response moves to unknown; queue retries only apply to definitively unsubmitted operations.
+
+### S8 / #20: truthful inbox presentation
+
+Reuse native session routes after #14 and delivery state after #18. Add `src/ui/inbox-state.ts` and inbox components to the existing shell. Keep unread (local UI attention) independent of intake status. Show sender-asserted display text separately from authenticated provenance, recipient session, original context, and one of queued/submitting/accepted-by-harness/unknown/explicit-handoff-accepted. A transport receipt is not read, processed, or accepted work.
+
+Manual review/intake is the default. Controls are capability driven: open, explicit intake, pause/resume future delivery, reconcile unknown, and safe retry of definitively failed sends. Automatic intake appears only after #19 and explicit per-session opt-in with model-use implications. Unsupported authentication/cursors/backlog/native versions have specific recovery actions. Reply uses original authoritative references and idempotency key; a stale reference offers a separate explicit new-conversation action, never an automatic retry to a new thread.
+
+Peer messages are visually distinct from user commands and native approval panels. Tests cover every evidence-backed status transition, unknown outcomes, stale reply references, capability absence, hidden-session unread counts, incoming bursts, navigation, resize, plain/screen-reader presentation, control escapes, and full teardown. Claude SDK and native Claude Channels remain distinct capabilities; neither implies the other's delivery semantics.
