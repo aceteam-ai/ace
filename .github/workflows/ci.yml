@@ -35,3 +35,8 @@ jobs:
 
       - run: pnpm build
         name: Build
+
+      - name: Smoke test built CLI startup
+        run: |
+          node dist/index.js --version
+          node dist/index.js < /dev/null
