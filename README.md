@@ -128,6 +128,19 @@ api-to-llm      API to LLM      chains    url
 $ ace workflow list-templates --category basics
 ```
 
+### `ace templates`
+
+Browse authorized platform templates and run a selected graph locally or remotely.
+
+```bash
+ace templates login --url https://app.example.com
+ace templates list --category general
+ace templates run TEMPLATE_UUID --input prompt="Hello"
+ace run --remote TEMPLATE_UUID --input prompt="Hello"
+```
+
+Platform credentials are separate from Fabric and model-provider credentials. Remote runs can consume credits and are never retried after an uncertain submission. See [Platform template client](docs/platform-template-client.md) for authentication, typed inputs, version behavior, and failure handling.
+
 ### `ace workflow create [template-id] [-o file]`
 
 Create a workflow from a bundled template. Prompts for template selection if no ID given, then lets you customize node parameters.
