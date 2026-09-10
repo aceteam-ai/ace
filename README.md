@@ -101,6 +101,11 @@ In Zsh, run `compinit` before the `eval` line so `compdef` is available.
 Completion suggests commands and flags from the installed CLI. Use
 `ace mcp --list` to discover live tool names.
 
+The first live local run provisions Python and workflow dependencies as needed.
+Progress appears in the workspace, and Esc cancels the operation. Browse with
+arrow keys, use Enter to select, and open keyboard help with `?` (Tab while
+entering text). Settings and provider setup are available from the home menu.
+
 ## How It Works
 
 ```

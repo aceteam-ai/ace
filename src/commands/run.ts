@@ -90,6 +90,17 @@ function isWorkflowFile(name: string): boolean {
   return name.endsWith(".json");
 }
 
+export function resolveFreeTextAlias(
+  target: string,
+  inlineText: string | undefined,
+  hasExplicitInput: boolean
+): { target: string; inlineText: string | undefined } {
+  if (!inlineText && !hasExplicitInput && /\s/.test(target) && !isWorkflowFile(target)) {
+    return { target: "summarize", inlineText: target };
+  }
+  return { target, inlineText };
+}
+
 export const runCommand = new Command("run")
   .description("Run a task or workflow (auto-detects .json files)")
   .argument("[pattern]", "Task name or workflow .json file")
@@ -182,10 +193,11 @@ export const runCommand = new Command("run")
 
       // A quoted multi-word argument is unambiguously free text. Keep
       // single-token unknown names as task typos so mistakes stay actionable.
-      if (!inlineText && /\s/.test(patternName) && !options.file && !options.inputDir) {
-        inlineText = patternName;
-        patternName = "summarize";
-      }
+      ({ target: patternName, inlineText } = resolveFreeTextAlias(
+        patternName,
+        inlineText,
+        Boolean(options.file || options.inputDir)
+      ));
 
       // ── Workflow mode (.json file) ─────────────────────
       if (isWorkflowFile(patternName)) {

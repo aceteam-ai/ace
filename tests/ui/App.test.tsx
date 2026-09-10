@@ -109,6 +109,22 @@ describe("terminal workspace", () => {
   });
 
 
+
+  it("sanitizes settings values and reports save failures in the workspace", async () => {
+    const fake = service({
+      getConfig: () => ({ default_model: "safe\u001b]8;;https://bad.invalid\u0007model\u001b]8;;\u0007" }),
+      updateDefaultModel: () => { throw new Error("settings are read-only"); },
+    });
+    const view = render(<App service={fake} />);
+    await tick(); view.stdin.write("\u001b"); await tick();
+    for (let i = 0; i < 3; i++) { view.stdin.write("j"); await tick(); }
+    view.stdin.write("\r"); await tick();
+    expect(view.lastFrame()).toContain("safemodel");
+    expect(view.lastFrame()).not.toContain("bad.invalid");
+    view.stdin.write("e"); await tick(); view.stdin.write("\r"); await tick();
+    expect(view.lastFrame()).toContain("settings are read-only");
+  });
+
   it("quits directly from the initial task picker", async () => {
     const onExit = vi.fn();
     const view = render(<App service={service()} onExit={onExit} />);
