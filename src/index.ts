@@ -1,27 +1,31 @@
+import { pathToFileURL } from "node:url";
 import { Command } from "commander";
-import { initCommand } from "./commands/init.js";
-import { workflowCommand } from "./commands/workflow.js";
 import { fabricCommand } from "./commands/fabric.js";
-import { runCommand } from "./commands/run.js";
+import { initCommand } from "./commands/init.js";
 import { loginCommand } from "./commands/login.js";
+import { runCommand } from "./commands/run.js";
+import { workflowCommand } from "./commands/workflow.js";
+import { startInteractive } from "./commands/interactive.js";
 
-// No args + TTY → interactive mode
-if (process.argv.length === 2 && process.stdin.isTTY) {
-  const { startInteractive } = await import("./commands/interactive.js");
-  await startInteractive();
-} else {
+export function createProgram(): Command {
   const program = new Command();
-
-  program
-    .name("ace")
-    .description("AceTeam CLI - Run AI workflows locally")
-    .version("0.3.0");
-
+  program.name("ace").description("AceTeam CLI - Run AI workflows locally").version("0.3.0");
   program.addCommand(initCommand);
   program.addCommand(runCommand);
   program.addCommand(workflowCommand);
   program.addCommand(fabricCommand);
   program.addCommand(loginCommand);
-
-  program.parse();
+  return program;
 }
+
+export async function main(argv = process.argv): Promise<void> {
+  if (argv.length === 2) {
+    if (process.stdin.isTTY && process.stdout.isTTY) await startInteractive();
+    else createProgram().outputHelp();
+    return;
+  }
+  await createProgram().parseAsync(argv);
+}
+
+const entry = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;
+if (entry === import.meta.url) await main();

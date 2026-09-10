@@ -8,7 +8,7 @@ AceTeam CLI - Run AI workflows locally from your terminal.
 ## Install
 
 ```bash
-# From npm (once published)
+# From npm
 npm install -g @aceteam/ace
 
 # Or run without installing
@@ -24,27 +24,30 @@ npm link                    # or install globally as `ace`
 
 ## Quick Start
 
+Run `ace` (or `npx @aceteam/ace`) to open the task picker immediately. No setup wizard or provider login is required to browse. Without a configured local provider, supported tasks show clearly labeled prerecorded samples; no model is called.
+
 ```bash
-# 1. Set up Python venv, install dependencies, create config
-ace init
+# Open the terminal workspace
+ace
 
-# 2. Browse available workflow templates
-ace workflow list-templates
+# Or summarize text directly with your configured provider
+ace run "Explain AI in one sentence"
 
-# 3. Create a workflow from a template
+# Create and run a workflow from the command line
 ace workflow create hello-llm -o my-workflow.json
-
-# 4. Run it
 ace workflow run my-workflow.json --input prompt="Explain AI in one sentence"
 ```
+
+The first live local run provisions Python and workflow dependencies as needed. Progress appears in the workspace, and Esc cancels the operation. Browse with arrow keys, use Enter to select, and open keyboard help with `?` (Tab while entering text). Settings and provider setup are available from the home menu.
+
 
 ## How It Works
 
 ```
 ace CLI (TypeScript)
   │
-  ├── ace init ──────────────> Detect Python 3.12+, create ~/.ace/venv,
-  │                            install aceteam-nodes, save config
+  ├── ace ──────────────────> Open task picker and offline samples
+  │                            provision runtime on first live run
   │
   ├── ace workflow create ──> Pick a bundled template, customize params,
   │                            write workflow JSON
@@ -66,14 +69,17 @@ The TypeScript CLI handles file validation, Python detection, and output formatt
 ## Requirements
 
 - Node.js 18+
-- Python 3.12+ (for workflow execution)
-- An LLM provider — cloud API key **or** a local model server (see below)
+- A terminal for the interactive workspace; explicit CLI commands also support non-TTY use
+- Network access for first-time runtime provisioning; Python 3.12+ is provisioned through uv when needed
+- An LLM provider — cloud API key **or** a local model server — for live LLM workflows (see below)
+
+Ace reuses an available uv installation or downloads its pinned official installer (0.12.12), checks its SHA-256 digest, and installs it under `~/.ace/bin`. The managed environment pins `aceteam-nodes[llm]==0.5.1` and `aceteam-workflow-engine==2.0.0rc8`: newer aceteam-nodes releases removed the CLI entry point used here. Runtime setup is unnecessary for browsing, offline samples, or native harness sessions.
 
 ## Commands
 
 ### `ace init`
 
-Interactive setup that:
+Optional explicit setup; ordinary task-picker startup skips this wizard. It:
 1. Detects Python 3.12+ (shows specific version error if too old)
 2. Creates a managed virtual environment at `~/.ace/venv/`
 3. Installs `aceteam-nodes` into the venv

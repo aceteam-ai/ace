@@ -10,6 +10,7 @@ import {
   readInputFile,
   runPattern,
   runBatch,
+  scanInputDir,
   writeOutput,
   getUserPatternsDir,
 } from "../utils/patterns.js";
@@ -87,6 +88,17 @@ async function runRemoteWorkflow(
 
 function isWorkflowFile(name: string): boolean {
   return name.endsWith(".json");
+}
+
+export function resolveFreeTextAlias(
+  target: string,
+  inlineText: string | undefined,
+  hasExplicitInput: boolean
+): { target: string; inlineText: string | undefined } {
+  if (!inlineText && !hasExplicitInput && /\s/.test(target) && !isWorkflowFile(target)) {
+    return { target: "summarize", inlineText: target };
+  }
+  return { target, inlineText };
 }
 
 export const runCommand = new Command("run")
@@ -178,6 +190,14 @@ export const runCommand = new Command("run")
         console.log(chalk.dim("       echo \"text\" | ace run <task>"));
         process.exit(1);
       }
+
+      // A quoted multi-word argument is unambiguously free text. Keep
+      // single-token unknown names as task typos so mistakes stay actionable.
+      ({ target: patternName, inlineText } = resolveFreeTextAlias(
+        patternName,
+        inlineText,
+        Boolean(options.file || options.inputDir)
+      ));
 
       // ── Workflow mode (.json file) ─────────────────────
       if (isWorkflowFile(patternName)) {
@@ -292,16 +312,18 @@ export const runCommand = new Command("run")
         process.exit(1);
       }
 
-      // ── Ensure Python + aceteam-nodes ──────────────────
-      const pythonPath = await ensurePython();
-
       // ── Batch mode (folder → folder) ──────────────────
       if (options.inputDir) {
         if (!options.outputDir) {
           output.error("--output-dir is required with --input-dir");
           process.exit(1);
         }
-
+        try { scanInputDir(options.inputDir); }
+        catch (err) {
+          output.error(err instanceof Error ? err.message : String(err));
+          process.exit(1);
+        }
+        const pythonPath = await ensurePython();
         await runBatch(pythonPath, pattern, options.inputDir, {
           outputDir: options.outputDir,
           model: options.model,
@@ -335,6 +357,9 @@ export const runCommand = new Command("run")
         console.log(chalk.dim("       echo \"text\" | ace run <task>"));
         process.exit(1);
       }
+
+      // Bootstrap only after the complete invocation has been validated.
+      const pythonPath = await ensurePython();
 
       // ── Execute pattern via aceteam-nodes ──────────────
       const spinner = ora(`Running ${pattern.name}...`).start();
