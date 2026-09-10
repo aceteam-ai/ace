@@ -63,8 +63,55 @@ An actual invalid/expired key remains a native authentication error on inference
 Explicitly set `settingSources: ["user", "project", "local"]` in production to
 load the intended native permission/instruction settings. The smoke's empty
 settings list is test isolation only. Do not depend on changing SDK defaults.
-Leave native permission mode/rules, tools, MCP servers, hooks, instructions, and
-sandbox configuration under the native settings cascade. Do not inject
+The pinned SDK injects `permissionMode: "default"` when the option is omitted.
+An isolated initialization-only probe confirmed that this overrides configured
+`plan` and `dontAsk`; passing the supported explicit `plan` option preserves it.
+These probes used an empty input iterator, no model request, and no credentials.
+Omission therefore does not preserve the configured native default mode.
+
+Before creating a query on **each explicit start or resume**, use the pinned
+public `resolveSettings({cwd: canonicalWorkspace, settingSources:
+["user", "project", "local"]})`, then pass that result through public
+`filterEscalatingDefaultMode`. Read only the filtered `permissions.defaultMode`:
+
+- An absent mode becomes `default`, including when the vendor filter removes an
+  untrusted escalating mode. Do not recreate its trust-tier rules in Ace.
+- Forward `default`, `plan`, or `dontAsk` explicitly through `query`'s supported
+  `permissionMode` option.
+- Reject any retained `acceptEdits`, `auto`, `bypassPermissions`, or unknown value
+  before creating the query. Explain that this bounded adapter supports the
+  three modes above and that the native CLI supports other configurations.
+  Do not silently downgrade a retained setting or grant escalation.
+- Reject own-key presence of `policyHelper` or `policyHelpers` in the effective
+  result or returned managed settings sources, and any returned `helper` policy origin.
+  `policyHelpers` is not in the public `Settings` type: inspect only its presence
+  as unsupported metadata, never parse or implement its private forms. The
+  resolver does not evaluate these helpers or their fallback payloads, so Ace
+  cannot reliably preserve the resulting mode. A public resolver probe confirmed
+  that singular helper, plural platform-helper, and plural static-payload keys
+  remain visible in the effective result and managed source; it created no query
+  and executed no helper.
+- Reject a failed settings resolution before query creation. Do not print raw
+  settings, helper commands, or the resolver's possibly sensitive error payload.
+
+These public resolver functions are `@alpha` APIs pinned to SDK `0.3.267`.
+The resolver reads the settings cascade, including available managed policy;
+it is not a security decision and does not run Claude's policy helper. Its first
+MDM lookup may invoke a platform utility. Use the same canonical workspace,
+settings sources, and process configuration environment for resolution and query;
+do not mutate global environment variables to simulate a different settings
+root. Inject the resolver boundary in isolated tests instead.
+
+Keep the native query loading the same settings sources. Do not pass the resolved
+settings back as programmatic settings, reconstruct native rules, or claim this
+preflight covers policy-helper output, later configuration changes, or every
+native mode. Do not use the unexported/untyped `resolvePermissionModeInCli` flag.
+The public [SDK reference](https://code.claude.com/docs/en/agent-sdk/typescript)
+documents the resolver and trust filter; the [permission documentation](https://code.claude.com/docs/en/agent-sdk/permissions)
+describes the distinct native modes.
+
+Leave native permission rules, tools, MCP servers, hooks, instructions, and
+sandbox configuration under native enforcement. Do not inject
 `allowedTools`, `bypassPermissions`, `allowDangerouslySkipPermissions`, additional
 directories, custom hooks, or persistent permission updates. Initial bounded
 `nativeOptions` permits only a model on a new session; resume accepts no overrides.
@@ -220,7 +267,10 @@ recoverable. Never search all projects, parse native history files, or use
 
 Open a fresh SDK query with `options.resume` set to exactly the registered ID,
 without `sessionId`, `continue`, `forkSession`, truncation, config, or model
-overrides. Keep the input iterator empty during initialization/auth checks. The
+overrides. Re-resolve the current workspace's supported permission mode as above
+and pass it explicitly; resume does not restore a previous mode or grant from
+Ace's registration. Do not infer a past mode from native history metadata. Keep
+the input iterator empty during initialization/auth checks. The
 native metadata and accepted resume configuration establish the resumed input
 surface; the first explicit turn's init must confirm the same native ID/cwd/runtime
 before displaying confirmed native context. Describe that pending confirmation
@@ -275,6 +325,9 @@ no parallel edits to its service/panel until the clean checkpoint.
 
 Required fixtures: empty-input startup, absent/conflicting auth, source confirmation
 before any prompt yield, actual permission mode, first-turn native identity,
+configured `plan`/`dontAsk` forwarding, vendor-filtered escalation, retained or
+unknown mode rejection before query creation, visible helper rejection, settings
+resolution failure, current-mode resolution again on resume,
 changed cwd/version/ID, delayed registration cancellation, two explicit turns,
 result+idle ordering, native error success-subtype, stale/deduped callbacks,
 preapproved/denied native tools without callbacks, workers distinct from other
