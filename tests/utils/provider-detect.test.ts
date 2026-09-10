@@ -26,7 +26,7 @@ describe("detectProvider", () => {
     vi.unstubAllGlobals();
   });
 
-  it("detects AceTeam fabric as highest priority", async () => {
+  it("prefers a local OpenAI credential over remote-only Fabric", async () => {
     mockLoadConfig.mockReturnValue({
       fabric_api_key: "ace-key-123",
       fabric_url: "https://app.aceteam.ai",
@@ -34,8 +34,8 @@ describe("detectProvider", () => {
     process.env.OPENAI_API_KEY = "sk-test"; // lower priority
 
     const result = await detectProvider();
-    expect(result.provider).toBe("aceteam");
-    expect(result.detail).toBe("https://app.aceteam.ai");
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-4o-mini");
   });
 
   it("detects OpenAI via env var", async () => {
@@ -112,7 +112,7 @@ describe("detectProvider", () => {
 describe("providerLabel", () => {
   it("labels AceTeam provider", () => {
     const info: ProviderInfo = { provider: "aceteam", detail: "https://app.aceteam.ai" };
-    expect(providerLabel(info)).toBe("AceTeam Fabric (https://app.aceteam.ai)");
+    expect(providerLabel(info)).toBe("AceTeam Fabric (https://app.aceteam.ai; remote workflows only)");
   });
 
   it("labels OpenAI provider", () => {

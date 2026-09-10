@@ -1,3 +1,5 @@
+import { realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import { initCommand } from "./commands/init.js";
 import { workflowCommand } from "./commands/workflow.js";
@@ -28,11 +30,7 @@ function configureErrorHandling(command: Command): void {
   for (const child of command.commands) configureErrorHandling(child);
 }
 
-// No args + TTY → interactive mode
-if (process.argv.length === 2 && process.stdin.isTTY) {
-  const { startInteractive } = await import("./commands/interactive.js");
-  await startInteractive();
-} else {
+export function createProgram(): Command {
   const program = new Command();
 
   program
@@ -61,8 +59,22 @@ if (process.argv.length === 2 && process.stdin.isTTY) {
   program.hook("postAction", () => {
     finishLegacyOutput();
   });
+  return program;
+}
+
+export async function main(argv = process.argv): Promise<void> {
+  if (argv.length === 2) {
+    if (process.stdin.isTTY && process.stdout.isTTY) {
+      const { startInteractive } = await import("./commands/interactive.js");
+      await startInteractive();
+    } else {
+      createProgram().outputHelp();
+    }
+    return;
+  }
+  const program = createProgram();
   try {
-    await program.parseAsync();
+    await program.parseAsync(argv);
   } catch (error) {
     if (!finishLegacyOutput(error)) {
       if (error instanceof CliError) {
@@ -87,3 +99,14 @@ if (process.argv.length === 2 && process.stdin.isTTY) {
     }
   }
 }
+
+export function isMainModule(invoked = process.argv[1]): boolean {
+  if (!invoked) return false;
+  try {
+    return pathToFileURL(realpathSync(invoked)).href === import.meta.url;
+  } catch {
+    return pathToFileURL(invoked).href === import.meta.url;
+  }
+}
+
+if (isMainModule()) await main();
