@@ -1,0 +1,50 @@
+{
+  "name": "Analyze Risk",
+  "description": "Risk assessment with severity levels",
+  "input_node": {
+    "id": "input",
+    "type": "Input",
+    "params": {
+      "fields": {
+        "prompt": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "output_node": {
+    "id": "output",
+    "type": "Output",
+    "params": {
+      "fields": {
+        "response": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "inner_nodes": [
+    {
+      "id": "llm",
+      "type": "LLM",
+      "params": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a risk analysis expert. Analyze the input text and identify potential risks.\n\nYour output MUST follow this format:\n\n## Risk Assessment\n\n### High Severity\n- **[Risk Name]**: [Description] | Impact: [description] | Likelihood: [High/Medium/Low] | Mitigation: [suggested action]\n\n### Medium Severity\n- **[Risk Name]**: [Description] | Impact: [description] | Likelihood: [High/Medium/Low] | Mitigation: [suggested action]\n\n### Low Severity\n- **[Risk Name]**: [Description] | Impact: [description] | Likelihood: [High/Medium/Low] | Mitigation: [suggested action]\n\n## Overall Assessment\nA 2-3 sentence summary of the overall risk profile and top recommendations.\n\nBase your analysis only on information present in the input. Use \"No risks identified\" for empty severity levels."
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source_id": "input",
+      "source_key": "prompt",
+      "target_id": "llm",
+      "target_key": "prompt"
+    },
+    {
+      "source_id": "llm",
+      "source_key": "response",
+      "target_id": "output",
+      "target_key": "response"
+    }
+  ]
+}

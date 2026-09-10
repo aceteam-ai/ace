@@ -1,3 +1,4 @@
+import { getWorkflowInputFields, parseWorkflowGraph, type WorkflowGraph } from "../utils/workflow-graph.js";
 import helloLlm from "./hello-llm.json" with { type: "json" };
 import textTransform from "./text-transform.json" with { type: "json" };
 import llmChain from "./llm-chain.json" with { type: "json" };
@@ -9,20 +10,18 @@ export interface TemplateMetadata {
   description: string;
   category: string;
   inputs: string[];
-  workflow: Record<string, unknown>;
+  workflow: WorkflowGraph;
+  runtimeWarning?: string;
 }
 
 function defineTemplate(
   id: string,
   category: string,
-  workflow: Record<string, unknown>
+  workflow: Record<string, unknown>,
+  runtimeWarning?: string
 ): TemplateMetadata {
-  // Extract input field names from v2 schema (input_node.params.fields)
-  const inputNode = workflow.input_node as
-    | { params?: { fields?: Record<string, unknown> } }
-    | undefined;
-  const fields = inputNode?.params?.fields ?? {};
-  const inputs = Object.keys(fields);
+  const graph = parseWorkflowGraph(workflow);
+  const inputs = Object.keys(getWorkflowInputFields(graph));
 
   return {
     id,
@@ -30,7 +29,8 @@ function defineTemplate(
     description: workflow.description as string,
     category,
     inputs,
-    workflow,
+    workflow: graph,
+    ...(runtimeWarning ? { runtimeWarning } : {}),
   };
 }
 
@@ -38,7 +38,8 @@ export const TEMPLATES: TemplateMetadata[] = [
   defineTemplate("hello-llm", "basics", helloLlm),
   defineTemplate("text-transform", "basics", textTransform),
   defineTemplate("llm-chain", "chains", llmChain),
-  defineTemplate("api-to-llm", "chains", apiToLlm),
+  defineTemplate("api-to-llm", "chains", apiToLlm,
+    "Authoring example only with aceteam-nodes 0.5.1: its APICall node is incompatible with the runner. Use a compatible APICall runtime before executing this workflow."),
 ];
 
 export function getTemplateById(id: string): TemplateMetadata | undefined {

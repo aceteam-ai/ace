@@ -1,0 +1,50 @@
+{
+  "name": "Document Summarizer",
+  "description": "Policy and budget document briefing for city officials",
+  "input_node": {
+    "id": "input",
+    "type": "Input",
+    "params": {
+      "fields": {
+        "prompt": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "output_node": {
+    "id": "output",
+    "type": "Output",
+    "params": {
+      "fields": {
+        "response": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "inner_nodes": [
+    {
+      "id": "llm",
+      "type": "LLM",
+      "params": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a senior policy analyst preparing executive briefings for city officials. Summarize the input document into a concise briefing format suitable for busy decision-makers.\n\nYour output MUST follow this format:\n\n## Executive Briefing\n\n**Document**: [title/type of document]\n**Date**: [if mentioned]\n**Prepared for**: City Leadership\n\n### Bottom Line Up Front (BLUF)\n[2-3 sentences capturing the most critical takeaway — what the reader must know]\n\n### Key Facts\n- [fact 1]\n- [fact 2]\n- [fact 3]\n\n### Financial Impact\n- **Total Cost/Budget**: [amount if mentioned]\n- **Key Line Items**: [significant budget items]\n- **Funding Source**: [if mentioned]\n\n### Action Items / Decisions Required\n1. [action needed with deadline if mentioned]\n2. [action needed]\n\n### Stakeholder Impact\n- **Residents**: [how this affects residents]\n- **Departments**: [departmental impact]\n- **Timeline**: [key dates and milestones]\n\n### Risks & Considerations\n- [risk or consideration 1]\n- [risk or consideration 2]\n\nKeep the briefing under 500 words. Use plain language — avoid jargon. Highlight numbers and deadlines prominently."
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source_id": "input",
+      "source_key": "prompt",
+      "target_id": "llm",
+      "target_key": "prompt"
+    },
+    {
+      "source_id": "llm",
+      "source_key": "response",
+      "target_id": "output",
+      "target_key": "response"
+    }
+  ]
+}

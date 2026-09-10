@@ -275,3 +275,30 @@ and restart/resume are subsequent slices; no new CLI command is exposed yet.
 ## License
 
 MIT
+
+### Task workflow graphs
+
+Built-in tasks use the same `WorkflowGraph` JSON format as bundled workflow
+examples. `ace run summarize "text"` still uses your configured default model;
+`--model` overrides LLM nodes without changing graph structure.
+
+A custom task can store a graph in `~/.ace/patterns/<task-id>/workflow.json`.
+The graph uses `input_node`, `inner_nodes`, `output_node`, and `edges`. A named
+text task accepts a string `prompt` and returns a string `response`; graphs
+with other required inputs run directly with `ace run workflow.json --input
+key=value`. Graph-defined models remain unchanged unless `--model` is supplied.
+User tasks override bundled tasks. Existing `system.md` tasks still work;
+`workflow.json` takes precedence when both files exist. Invalid user graphs
+report an error instead of silently selecting a bundled task.
+
+The `api-to-llm` graph is an authoring example. Its URL template, dynamic input
+schema, and response edge match the public node contract, but the APICall node
+in `aceteam-nodes==0.5.1` has an incompatible execution signature with
+`aceteam-workflow-engine==2.0.0rc8`. It validates but cannot execute with that
+pair; use a compatible APICall runtime before running it. A synthetic local
+smoke reproduced the failure before any HTTP request. See the
+[public APICall implementation](https://github.com/aceteam-ai/aceteam-nodes/blob/v0.5.1/src/aceteam_nodes/nodes/api_call.py).
+
+Platform template catalog access and credit-based remote template execution
+remain separate follow-up work under [#5](https://github.com/aceteam-ai/ace/issues/5).
+Existing Fabric workflow execution keeps its current command semantics.

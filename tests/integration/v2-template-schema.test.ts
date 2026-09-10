@@ -194,3 +194,14 @@ describe("v2 template schema compliance", () => {
     expect(t.inputs).toContain("instructions");
   });
 });
+
+describe("API authoring example", () => {
+  it("declares its URL input and uses the actual APICall response key", () => {
+    const template = getTemplateById("api-to-llm")!;
+    const fetch = template.workflow.inner_nodes.find((node) => node.id === "fetch")!;
+    expect(fetch.params.url).toBe("{{ url }}");
+    expect(fetch.params.parameters).toEqual({ url: { type: "string" } });
+    expect(template.workflow.edges.find((edge) => edge.source_id === "fetch")?.source_key).toBe("response");
+    expect(template.runtimeWarning).toContain("Authoring example only");
+  });
+});

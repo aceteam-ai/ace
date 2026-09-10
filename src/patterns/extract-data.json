@@ -1,0 +1,50 @@
+{
+  "name": "Extract Data",
+  "description": "Extract entities, dates, numbers into structured format",
+  "input_node": {
+    "id": "input",
+    "type": "Input",
+    "params": {
+      "fields": {
+        "prompt": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "output_node": {
+    "id": "output",
+    "type": "Output",
+    "params": {
+      "fields": {
+        "response": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "inner_nodes": [
+    {
+      "id": "llm",
+      "type": "LLM",
+      "params": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a data extraction specialist. Analyze the input text and extract all structured data.\n\nYour output MUST follow this format:\n\n## Entities\n- **People**: [list of names]\n- **Organizations**: [list of org names]\n- **Locations**: [list of places]\n\n## Dates & Times\n- [date/time references with context]\n\n## Numbers & Metrics\n- [numerical data with labels and context]\n\n## Key Facts\n- [important factual statements]\n\nExtract everything precisely as stated in the source. Do not infer or add data not present in the text. Use \"None found\" for empty categories."
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source_id": "input",
+      "source_key": "prompt",
+      "target_id": "llm",
+      "target_key": "prompt"
+    },
+    {
+      "source_id": "llm",
+      "source_key": "response",
+      "target_id": "output",
+      "target_key": "response"
+    }
+  ]
+}
