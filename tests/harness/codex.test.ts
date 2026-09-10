@@ -2,6 +2,10 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { mkdtemp, mkdir, rename, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { NativeSessionStore } from "../../src/harness/session-store.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CodexNativeHarnessAdapter, TESTED_CODEX_VERSION,
@@ -66,6 +70,7 @@ function rig(options: {
   version?: string; auth?: Wire; initialized?: Wire; started?: Wire;
   handle?: (child: SyntheticChild, request: Wire) => boolean;
   requestTimeoutMs?: number; ignoreTerm?: boolean;
+  sessionStore?: NativeSessionStore; read?: Wire; resumed?: Wire;
 } = {}) {
   const versions: SyntheticChild[] = [];
   const children: SyntheticChild[] = [];
@@ -86,6 +91,8 @@ function rig(options: {
           case "initialize": child.reply(request, options.initialized ?? { userAgent: "synthetic-codex/0.153.4", codexHome: "/synthetic/native-home" }); break;
           case "account/read": child.reply(request, options.auth ?? { account: { type: "chatgpt", email: "synthetic@example.invalid" }, requiresOpenaiAuth: true }); break;
           case "thread/start": child.reply(request, options.started ?? { thread: { id: threadId }, model: "synthetic-model", modelProvider: "synthetic", cwd, approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: { type: "readOnly" } }); break;
+          case "thread/read": child.reply(request, options.read ?? { thread: nativeThread(cwd, "notLoaded") }); break;
+          case "thread/resume": child.reply(request, options.resumed ?? { thread: nativeThread(cwd, "idle"), cwd, model: "saved-model", modelProvider: "saved-provider", approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: { type: "readOnly" } }); break;
           case "turn/start": child.reply(request, { turn: { ...turn(), id: ++turnCounter === 1 ? turnId : `${turnId}-${turnCounter}` } }); break;
           case "turn/interrupt": child.reply(request, {}); break;
         }
@@ -93,8 +100,24 @@ function rig(options: {
     }
     return child.asChild();
   };
-  const adapter = new CodexNativeHarnessAdapter({ processFactory, now: () => "2026-01-01T00:00:00.000Z", requestTimeoutMs: options.requestTimeoutMs ?? 1000, shutdownTimeoutMs: 5 });
+  const adapter = new CodexNativeHarnessAdapter({ processFactory, sessionStore: options.sessionStore, now: () => "2026-01-01T00:00:00.000Z", requestTimeoutMs: options.requestTimeoutMs ?? 1000, shutdownTimeoutMs: 5 });
   return { adapter, calls, versions, children, get child() { return children.at(-1)!; } };
+}
+
+function nativeThread(cwd: string, status = "idle"): Wire {
+  return { id: threadId, cwd, status: { type: status }, ephemeral: false, cliVersion: TESTED_CODEX_VERSION, historyMode: "paginated", turns: [] };
+}
+
+async function resumeRig(options: Parameters<typeof rig>[0] = {}) {
+  const root = await mkdtemp(join(tmpdir(), "ace-codex-resume-"));
+  const directory = join(root, "workspace");
+  await mkdir(directory);
+  const store = new NativeSessionStore({ directory: join(root, "state") });
+  await store.rememberCreatedSession({ adapterId: "codex", sessionId: "original", nativeSessionId: threadId }, directory);
+  disposals.push(() => rm(root, { recursive: true, force: true }));
+  const instance = rig({ ...options, sessionStore: store });
+  const command = { type: "session.resume" as const, registeredSessionId: "original", sessionId: "new-incarnation", nativeSessionId: threadId, workspace: directory };
+  return { ...instance, get child() { return instance.child; }, command, store, root, workspace: directory };
 }
 
 async function running(options: Parameters<typeof rig>[0] = {}) {
@@ -142,7 +165,7 @@ describe("Codex native thread adapter", () => {
     child.notify("account/updated", { email: "hidden@example.invalid", authMode: "chatgpt" });
     expect(JSON.stringify(events)).not.toMatch(/example.invalid|native-home/);
     expect(session).toEqual({ adapterId: "codex", sessionId: startCommand.sessionId, nativeSessionId: threadId });
-    expect(adapter.capabilities.resume.supported).toBe(false);
+    expect(adapter.capabilities.resume.supported).toBe(true);
   });
 
   it("maps native messages, tools, workers and reported changes with IDs and full structured detail", async () => {
@@ -374,7 +397,7 @@ describe("Codex native thread adapter", () => {
     const fresh = await adapter.start({ ...startCommand, sessionId: "fresh" });
     expect(fresh.status).toBe("ok");
     if (fresh.status === "ok") disposals.push(() => adapter.dispose({ type: "session.dispose", session: fresh.value }));
-    expect(await adapter.resume({ type: "session.resume", sessionId: "resume", nativeSessionId: threadId, workspace })).toMatchObject({ status: "unsupported" });
+    expect(await adapter.resume({ type: "session.resume", sessionId: "resume", nativeSessionId: threadId, workspace })).toMatchObject({ status: "rejected" });
   });
 
   it("rejects concurrent starts and input, preserving only one native thread and turn", async () => {
@@ -652,5 +675,108 @@ describe("real synthetic subprocess boundary", () => {
     await vi.waitFor(() => expect(events.some((event) => event.type === (mode === "happy" ? "turn.completed" : "session.error"))).toBe(true));
     await adapter.dispose({ type: "session.dispose", session });
     expect(children.every((child) => child.exitCode !== null || child.signalCode !== null)).toBe(true);
+  });
+});
+
+
+describe("registered Codex restart/resume", () => {
+  it("loads native history with current auth and permissions without replaying a turn", async () => {
+    const instance = await resumeRig();
+    const { adapter, command, store } = instance;
+    const original = await store.list();
+    const result = await adapter.resume(command);
+    expect(result).toEqual({ status: "ok", value: { adapterId: "codex", sessionId: "new-incarnation", nativeSessionId: threadId } });
+    if (result.status !== "ok") throw new Error("resume failed");
+    disposals.push(() => adapter.dispose({ type: "session.dispose", session: result.value }));
+    const messages = instance.child.messages;
+    expect(messages.map((message) => message.method)).toEqual(["initialize", "initialized", "account/read", "thread/read", "thread/resume"]);
+    expect(messages[3].params).toEqual({ threadId, includeTurns: false });
+    expect(messages[4].params).toEqual({ threadId, excludeTurns: true });
+    const events: NativeHarnessEvent[] = [];
+    adapter.observe({ type: "session.observe", session: result.value }, (event) => events.push(event));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "session.state", state: "ready", nativeDetails: { permissionContext: { model: "saved-model", modelProvider: "saved-provider" } } });
+    expect(await adapter.respondToApproval({ type: "approval.respond", session: result.value, approvalId: "old-approval", decision: "accept" })).toMatchObject({ status: "rejected", code: "stale_approval" });
+    expect(await adapter.sendInput({ type: "session.input", session: { ...result.value, sessionId: "original" }, input: "stale command" })).toMatchObject({ code: "invalid_session" });
+    expect(await adapter.sendInput({ type: "session.input", session: result.value, input: "Explicit new turn" })).toMatchObject({ status: "ok" });
+    expect(messages.filter((message) => message.method === "turn/start")).toHaveLength(1);
+    expect(await store.list()).toEqual(original);
+  });
+
+  it.each([
+    { registeredSessionId: undefined }, { registeredSessionId: "unregistered" },
+    { nativeSessionId: "arbitrary-thread" }, { sessionId: "original" },
+    { nativeOptions: { model: "override" } },
+  ])("rejects ineligible selections before spawning: %j", async (override) => {
+    const instance = await resumeRig();
+    expect((await instance.adapter.resume({ ...instance.command, ...override })).status).not.toBe("ok");
+    expect(instance.calls).toHaveLength(0);
+  });
+
+  it.each([
+    [{ version: "codex-cli 9.9.9" }, "incompatible_codex"],
+    [{ auth: { account: null, requiresOpenaiAuth: true } }, "codex_authentication_required"],
+  ] as const)("requires current native version and authentication: %j", async (options, code) => {
+    const instance = await resumeRig(options);
+    expect(await instance.adapter.resume(instance.command)).toMatchObject({ status: "error", code });
+    expect(instance.children.flatMap((child) => child.messages).some((message) => message.method === "thread/resume")).toBe(false);
+  });
+
+  it.each([
+    [{ id: "different-native" }, "session_identity_mismatch"],
+    [{ ephemeral: true }, "incompatible_native_history"],
+    [{ cliVersion: "0.1.0" }, "incompatible_native_history"],
+    [{ historyMode: "unknown" }, "incompatible_native_history"],
+    [{ status: { type: "active", activeFlags: [] } }, "native_session_unavailable"],
+    [{ status: { type: "systemError" } }, "native_session_unavailable"],
+  ] as const)("rejects incompatible native metadata before resume: %j", async (override, code) => {
+    const instance = await resumeRig({ handle(child, request) {
+      if (request.method !== "thread/read") return false;
+      child.reply(request, { thread: { ...nativeThread(instance.workspace, "notLoaded"), ...override } }); return true;
+    } });
+    expect(await instance.adapter.resume(instance.command)).toMatchObject({ status: "error", code });
+    expect(instance.child.messages.some((message) => message.method === "thread/resume")).toBe(false);
+  });
+
+  it("reports missing native history without silently starting a new thread", async () => {
+    const instance = await resumeRig({ handle(child, request) {
+      if (request.method !== "thread/read") return false;
+      child.send({ id: request.id, error: { code: -32000, message: "Native history is missing. Start a new session." } }); return true;
+    } });
+    expect(await instance.adapter.resume(instance.command)).toMatchObject({ status: "error", code: "codex_request_failed" });
+    expect(instance.child.messages.some((message) => ["thread/start", "thread/resume", "turn/start"].includes(message.method))).toBe(false);
+    expect(await instance.store.list()).toHaveLength(1);
+  });
+
+  it("rejects native or effective workspace mismatch and a changed directory", async () => {
+    const instance = await resumeRig({ handle(child, request) {
+      if (request.method !== "thread/resume") return false;
+      child.reply(request, { thread: nativeThread(instance.workspace), cwd: instance.root }); return true;
+    } });
+    expect(await instance.adapter.resume(instance.command)).toMatchObject({ status: "error", code: "session_workspace_mismatch" });
+    await rename(instance.workspace, join(instance.root, "original-directory"));
+    await mkdir(instance.workspace);
+    const next = rig({ sessionStore: instance.store });
+    expect((await next.adapter.resume({ ...instance.command, sessionId: "another-incarnation" })).status).not.toBe("ok");
+    expect(next.calls).toHaveLength(0);
+  });
+
+  it("rejects startup approval/activity instead of restoring permission grants", async () => {
+    const instance = await resumeRig({ handle(child, request) {
+      if (request.method !== "thread/resume") return false;
+      approval(child); return true;
+    } });
+    expect(await instance.adapter.resume(instance.command)).toMatchObject({ status: "error", code: "unexpected_resume_activity" });
+    expect(instance.child.messages.some((message) => message.result)).toBe(false);
+    expect(instance.child.signals).toContain("SIGTERM");
+  });
+
+  it("cancels pending native history lookup with no resume or turn submission", async () => {
+    const instance = await resumeRig({ handle: (_child, request) => request.method === "thread/read" });
+    const opening = instance.adapter.resume(instance.command);
+    await vi.waitFor(() => expect(instance.children.at(-1)?.messages.some((message) => message.method === "thread/read")).toBe(true));
+    expect(await instance.adapter.dispose({ type: "session.dispose", session: { adapterId: "codex", sessionId: instance.command.sessionId } })).toMatchObject({ status: "ok" });
+    expect((await opening).status).toBe("error");
+    expect(instance.child.messages.some((message) => ["thread/resume", "turn/start"].includes(message.method))).toBe(false);
   });
 });

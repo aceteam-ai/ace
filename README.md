@@ -40,7 +40,7 @@ ace workflow run my-workflow.json --input prompt="Explain AI in one sentence"
 
 The first live local run provisions Python and workflow dependencies as needed. Progress appears in the workspace, and Esc cancels the operation. Browse with arrow keys, use Enter to select, and open keyboard help with `?` (Tab while entering text). Settings and provider setup are available from the home menu.
 
-For a native coding conversation, press Esc and choose **Native coding session**. Select Codex and a workspace to use its own sign-in and permissions, with conversation, activity, changes, and explicit approval panels. See [native session controls and requirements](docs/native-sessions.md).
+For a native coding conversation, press Esc and choose **Native coding session**. Select Codex and a workspace, then start a new session or explicitly resume a saved one using its own sign-in and permissions, with conversation, activity, changes, and explicit approval panels. See [native session controls and requirements](docs/native-sessions.md).
 
 
 ## How It Works
@@ -269,7 +269,8 @@ The shared [native session panels](docs/native-sessions.md) use the
 turns in one Ace-created native thread using Codex CLI 0.153.4. It preserves native
 authentication and permissions and has credential-free synthetic tests. The
 [turn lifecycle amendment](docs/native-turn-lifecycle.md) distinguishes native turns
-from the local session lifetime. Restart/resume is a subsequent slice.
+from the local session lifetime. [Explicit managed resume](docs/native-session-resume.md)
+uses only locally registered sessions and never replays old commands or approvals.
 
 ## Related
 

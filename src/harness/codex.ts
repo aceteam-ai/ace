@@ -6,6 +6,7 @@ import {
   spawnCodex, stopChild, TESTED_CODEX_VERSION,
   type CodexProcessFactory, type CodexRpcCall, type JsonObject, type RpcId,
 } from "./codex-protocol.js";
+import { NativeSessionStore, SessionStoreError, captureWorkspaceIdentity, sameWorkspace, type NativeSessionRecord } from "./session-store.js";
 import type {
   CommandAccepted, DisposeSessionCommand, InterruptSessionCommand,
   NativeHarnessAdapter, NativeHarnessCapabilities, NativeHarnessCommandResult,
@@ -25,6 +26,8 @@ export interface CodexNativeHarnessAdapterOptions {
   now?: () => string;
   /** Injectable process boundary for synthetic fixtures. Production spawns without a shell. */
   processFactory?: CodexProcessFactory;
+  /** Product connections additionally acquire ownership through the manager. */
+  sessionStore?: Pick<NativeSessionStore, "resolveForResume">;
 }
 
 interface PendingApproval {
@@ -67,6 +70,7 @@ interface Session {
   publishing: boolean;
   failure?: CodexError;
   cleanup?: Promise<void>;
+  resuming?: boolean;
 }
 
 function rejected(code: NativeHarnessRejectionCode, message: string): NativeHarnessCommandResult<never> {
@@ -107,7 +111,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     observe: Object.freeze({ supported: true as const }),
     interrupt: Object.freeze({ supported: true as const }),
     respondToApproval: Object.freeze({ supported: true as const }),
-    resume: Object.freeze({ supported: false as const, reason: "Restart/resume and attaching existing Codex sessions are not implemented." }),
+    resume: Object.freeze({ supported: true as const }),
     dispose: Object.freeze({ supported: true as const }),
   });
 
@@ -124,6 +128,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
       shutdownTimeoutMs: options.shutdownTimeoutMs ?? 1_000,
       now: options.now ?? (() => new Date().toISOString()),
       processFactory: options.processFactory ?? spawnCodex,
+      sessionStore: options.sessionStore ?? new NativeSessionStore(),
     };
     for (const value of [this.options.requestTimeoutMs, this.options.shutdownTimeoutMs]) {
       if (!Number.isSafeInteger(value) || value <= 0 || value > 2_147_483_647 / 2) {
@@ -133,6 +138,12 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
   }
 
   async start(command: StartSessionCommand): Promise<NativeHarnessCommandResult<NativeHarnessSessionIdentity>> {
+    return this.openSession(command);
+  }
+
+  private async openSession(input: StartSessionCommand | ResumeSessionCommand): Promise<NativeHarnessCommandResult<NativeHarnessSessionIdentity>> {
+    const command = { ...input, nativeOptions: input.nativeOptions && { ...input.nativeOptions } };
+    const resuming = command.type === "session.resume";
     if (this.usedSessionIds.has(command.sessionId)) return rejected("duplicate_session", "This local session ID has already been used.");
     if (this.session) return rejected("invalid_state", "Dispose the existing Codex session before starting another.");
     if (!command.sessionId || !isAbsolute(command.workspace)) return rejected("invalid_session", "A session ID and absolute workspace directory are required.");
@@ -140,19 +151,39 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     const nativeOptions = command.nativeOptions ?? {};
     if (!object(nativeOptions) || Object.keys(nativeOptions).some((key) => key !== "model") ||
         ("model" in nativeOptions && (typeof nativeOptions.model !== "string" || !nativeOptions.model.trim()))) {
-      return { status: "unsupported", operation: "start", reason: "Only the native model option is supported. Configure authentication and permissions in Codex itself." };
+      return { status: "unsupported", operation: resuming ? "resume" : "start", reason: "Only the native model option is supported. Configure authentication and permissions in Codex itself." };
+    }
+    if (resuming && (!command.registeredSessionId || !command.nativeSessionId ||
+        command.registeredSessionId === command.sessionId)) {
+      return rejected("invalid_session", "Resume requires a saved Ace registration and a fresh local session ID.");
+    }
+    if (resuming && Object.keys(nativeOptions).length) {
+      return { status: "unsupported", operation: "resume", reason: "Resume uses the native thread's configuration. Native option overrides are unsupported." };
     }
     const model = nativeOptions.model;
     const session: Session = {
       identity: { adapterId: this.adapterId, sessionId: command.sessionId },
       state: "starting", sequence: 0, listeners: new Set(), approvals: new Map(),
       seenRequests: new Set(), completedItems: new Set(), turnRequested: false,
-      interruptRequested: false, completedTurns: new Set(), eventQueue: [], publishing: false,
+      interruptRequested: false, completedTurns: new Set(), eventQueue: [], publishing: false, resuming,
     };
     this.session = session;
     this.usedSessionIds.add(command.sessionId);
     this.state(session, "starting", "initializing", {}, command.correlationId);
     try {
+      let registered: NativeSessionRecord | undefined;
+      const resolveRegistration = async () => {
+        if (command.type !== "session.resume") throw new CodexError("invalid_resume", "A saved session selection is required.");
+        const current = await this.options.sessionStore.resolveForResume({
+          adapterId: this.adapterId, sessionId: command.registeredSessionId!, workspace: command.workspace,
+        });
+        if (current.nativeSessionId !== command.nativeSessionId) {
+          throw new CodexError("session_identity_mismatch", "The selected saved registration does not match this native session.");
+        }
+        this.assertOpen(session);
+        return current;
+      };
+      if (resuming) registered = await resolveRegistration();
       await checkCodexVersion(this.options.processFactory, this.options.executable, command.workspace,
         this.options.requestTimeoutMs, this.options.shutdownTimeoutMs, (child) => { session.child = child; });
       this.assertOpen(session);
@@ -179,26 +210,37 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
       }
       // Account fields and initialize.codexHome are never emitted or retained.
       this.assertOpen(session);
-      const started = await rpc.request("thread/start", {
-        cwd: command.workspace,
-        ...(typeof model === "string" ? { model } : {}),
-      });
-      this.assertOpen(session);
-      session.identity.nativeSessionId = text(record(started.thread, "thread").id, "thread.id");
-      if (!(typeof started.approvalPolicy === "string" || object(started.approvalPolicy)) ||
-          typeof started.approvalsReviewer !== "string" || !object(started.sandbox)) {
-        throw new CodexError("incompatible_codex_protocol", "Codex did not report its effective permission configuration.");
+      let started: JsonObject;
+      if (registered && command.type === "session.resume") {
+        const read = await rpc.request("thread/read", { threadId: command.nativeSessionId, includeTurns: false });
+        this.assertOpen(session);
+        await this.verifyResumedThread(record(read.thread, "thread/read.thread"), registered, false);
+        await resolveRegistration();
+        started = await rpc.request("thread/resume", { threadId: command.nativeSessionId, excludeTurns: true });
+        this.assertOpen(session);
+        await this.verifyResumedThread(record(started.thread, "thread/resume.thread"), registered, true);
+        const effectiveWorkspace = await captureWorkspaceIdentity(text(started.cwd, "thread/resume.cwd"));
+        if (!sameWorkspace(effectiveWorkspace, registered.workspace)) {
+          throw new CodexError("session_workspace_mismatch", "Codex resumed the thread in a different workspace. Start a new session instead.");
+        }
+        await resolveRegistration();
+      } else {
+        started = await rpc.request("thread/start", {
+          cwd: command.workspace,
+          ...(typeof model === "string" ? { model } : {}),
+        });
       }
-      session.permissions = structuredClone({
-        approvalPolicy: started.approvalPolicy, approvalsReviewer: started.approvalsReviewer,
-        sandbox: started.sandbox, model: started.model, modelProvider: started.modelProvider,
-        cwd: started.cwd, protocol: "v2", codexVersion: TESTED_CODEX_VERSION,
-      });
+      this.assertOpen(session);
+      // Bind after asynchronous resume checks, so cancellation uses the reserved local ID.
+      session.identity.nativeSessionId = text(record(started.thread, "thread").id, "thread.id");
+      session.permissions = this.permissionContext(started);
       this.state(session, "ready", "idle", { permissionContext: session.permissions }, command.correlationId);
       this.assertOpen(session);
       return { status: "ok", value: { ...session.identity } };
     } catch (error) {
-      const failure = session.failure ?? asCodexError(error);
+      const failure = session.failure ?? (error instanceof SessionStoreError
+        ? new CodexError(`session_state_${error.code}`, error.message)
+        : asCodexError(error));
       this.fail(session, failure);
       await this.cleanup(session);
       session.listeners.clear();
@@ -307,8 +349,38 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     }
   }
 
-  async resume(_command: ResumeSessionCommand): Promise<NativeHarnessCommandResult<NativeHarnessSessionIdentity>> {
-    return { status: "unsupported", operation: "resume", reason: "Only new Ace-created Codex sessions are supported; restart/resume is a later slice." };
+  async resume(command: ResumeSessionCommand): Promise<NativeHarnessCommandResult<NativeHarnessSessionIdentity>> {
+    return this.openSession(command);
+  }
+
+  private permissionContext(response: JsonObject): JsonObject {
+    if (!(typeof response.approvalPolicy === "string" || object(response.approvalPolicy)) ||
+        typeof response.approvalsReviewer !== "string" || !object(response.sandbox)) {
+      throw new CodexError("incompatible_codex_protocol", "Codex did not report its effective permission configuration.");
+    }
+    return structuredClone({
+      approvalPolicy: response.approvalPolicy, approvalsReviewer: response.approvalsReviewer,
+      sandbox: response.sandbox, model: response.model, modelProvider: response.modelProvider,
+      cwd: response.cwd, protocol: "v2", codexVersion: TESTED_CODEX_VERSION,
+    });
+  }
+
+  private async verifyResumedThread(thread: JsonObject, registered: NativeSessionRecord, loaded: boolean): Promise<void> {
+    if (thread.id !== registered.nativeSessionId) {
+      throw new CodexError("session_identity_mismatch", "Codex returned a different native session. The selected registration was left unchanged.");
+    }
+    if (thread.ephemeral !== false || thread.cliVersion !== TESTED_CODEX_VERSION ||
+        !["legacy", "paginated"].includes(String(thread.historyMode))) {
+      throw new CodexError("incompatible_native_history", "The native thread is ephemeral or its creation version/history format is unsupported. Start a new session.");
+    }
+    const state = record(thread.status, "thread.status").type;
+    if (state !== "idle" && !(state === "notLoaded" && !loaded)) {
+      throw new CodexError("native_session_unavailable", "The native thread is busy or has an unsupported state. Resolve it in Codex or start a new session.");
+    }
+    const workspace = await captureWorkspaceIdentity(text(thread.cwd, "thread.cwd"));
+    if (!sameWorkspace(workspace, registered.workspace)) {
+      throw new CodexError("session_workspace_mismatch", "The native history belongs to another workspace. Select its original workspace or start a new session.");
+    }
   }
 
   async dispose(command: DisposeSessionCommand): Promise<NativeHarnessCommandResult<SessionDisposed>> {
@@ -392,6 +464,11 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
 
   private message(session: Session, method: string, params: JsonObject, requestId?: RpcId): void {
     if (this.terminal(session)) return;
+    if (session.resuming && session.state === "starting" && (requestId !== undefined ||
+        method.startsWith("turn/") || method.startsWith("item/") || method === "serverRequest/resolved" ||
+        (method === "thread/status/changed" && (!object(params.status) || !["idle", "notLoaded"].includes(String(params.status.type)))))) {
+      throw new CodexError("unexpected_resume_activity", "Codex reported active work or an approval while resume was opening. No prior command or approval was replayed.");
+    }
     if (requestId !== undefined) {
       // A delayed old-turn request must never become a fresh UI prompt.
       if (typeof params.turnId === "string" && session.completedTurns.has(params.turnId)) {

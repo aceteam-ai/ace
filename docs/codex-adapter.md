@@ -10,8 +10,9 @@ The panels use the existing `ace` workspace; existing workflow commands keep the
 
 Create an adapter, call `start`, observe its returned identity, then call
 `sendInput`. Only one session may exist in an adapter at a time. `start` creates a
-new native thread; it never reads, attaches, resumes, forks, or imports another
-thread. `sendInput` requires ready state and reserves a turn before sending it,
+new native thread. Explicit `resume` is limited to saved Ace registrations through
+[the managed resume boundary](native-session-resume.md); arbitrary attach, fork,
+and import remain unsupported. `sendInput` requires ready state and reserves a turn before sending it,
 so concurrent input cannot accidentally steer or create additional work.
 
 ```ts
@@ -55,7 +56,8 @@ the local session. Transport/protocol failures end the Codex session; another
 ready notification cannot reopen it. A failed native turn allows further explicit
 input when it completes. A non-retrying native error notification stays busy until
 `turn/completed`, rather than inventing an early completion. There is no automatic
-retry or active-turn steering. Restart/resume remains explicitly unsupported.
+retry or active-turn steering. Restart requires a new local connection identity
+and explicit selection of an eligible saved registration.
 
 `interrupt` requires an acknowledged live turn and sends `turn/interrupt` once.
 Its RPC acknowledgment does not fabricate cancellation: the native turn outcome

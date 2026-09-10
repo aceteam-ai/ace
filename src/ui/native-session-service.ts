@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { CodexNativeHarnessAdapter } from "../harness/codex.js";
+import type { NativeSessionRecord } from "../harness/session-store.js";
+import type { SessionManagerNotice } from "../harness/session-manager.js";
 import type { CommandAccepted, NativeHarnessAdapter, NativeHarnessCommandResult, NativeHarnessObservation, NativeHarnessSessionIdentity } from "../harness/types.js";
 import { initialNativeSessionState, nativeText, reduceNativeEvent, type NativeSessionState } from "./native-session-state.js";
 
@@ -25,8 +26,9 @@ export class NativeSessionService {
   private disposed = false;
   private epoch = 0;
   private inputAttempt = 0;
+  private readonly localOperations = new Set<Promise<unknown>>();
 
-  constructor(readonly adapter: NativeHarnessAdapter = new CodexNativeHarnessAdapter()) {}
+  constructor(readonly adapter: NativeHarnessAdapter) {}
   getSnapshot = (): NativeSessionState => this.state;
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -53,7 +55,29 @@ export class NativeSessionService {
     if (!this.disposed && this.epoch === epoch + 1) this.update({ ...this.state, phase: "error", notice: nativeText(result.message) });
   }
 
-  async start(workspace: string): Promise<StartResult> {
+  runLocalOperation = <T>(action: () => Promise<T>): Promise<T> => {
+    const operation = Promise.resolve().then(() => {
+      if (this.disposed) throw new Error("The native workspace is closing.");
+      return action();
+    });
+    this.localOperations.add(operation);
+    return operation.finally(() => { this.localOperations.delete(operation); });
+  };
+
+  reportRegistrationNotice = (notice: SessionManagerNotice): void => {
+    if (!this.disposed) this.update({ ...this.state, registrationNotice: nativeText(`${notice.message}${notice.recoveryPath ? ` Recovery path: ${notice.recoveryPath}` : ""}`) });
+  };
+
+  start(workspace: string): Promise<StartResult> { return this.open(workspace); }
+
+  resume(record: NativeSessionRecord, workspace: string): Promise<StartResult> {
+    if (record.adapterId !== this.adapter.adapterId) return Promise.resolve({ status: "rejected", code: "adapter_mismatch", message: "Choose the native provider that created this registration." });
+    const capability = this.adapter.capabilities.resume;
+    if (!capability.supported) return Promise.resolve({ status: "unsupported", operation: "resume", reason: capability.reason });
+    return this.open(workspace, { ...record });
+  }
+
+  private async open(workspace: string, saved?: NativeSessionRecord): Promise<StartResult> {
     if (this.disposed || this.opening || this.closing || !["idle", "closed", "error"].includes(this.state.phase)) return closedResult();
     if (this.identity) await this.close();
     if (this.disposed || this.identity || this.opening || this.closing) return closedResult();
@@ -61,7 +85,8 @@ export class NativeSessionService {
     const identity = { adapterId: this.adapter.adapterId, sessionId: randomUUID() };
     this.identity = identity;
     const pending = Promise.resolve().then(() => this.current(epoch)
-      ? this.adapter.start({ type: "session.start", sessionId: identity.sessionId, workspace }) : closedResult());
+      ? saved ? this.adapter.resume({ type: "session.resume", sessionId: identity.sessionId, registeredSessionId: saved.sessionId, nativeSessionId: saved.nativeSessionId, workspace })
+        : this.adapter.start({ type: "session.start", sessionId: identity.sessionId, workspace }) : closedResult());
     this.opening = pending;
     this.update({ ...initialNativeSessionState(), phase: "starting", workspace, identity });
     try {
@@ -73,7 +98,7 @@ export class NativeSessionService {
       }
       this.identity = result.value;
       // Publish readiness only after the observer is registered; a ready listener may send input immediately.
-      this.state = { ...this.state, identity: result.value };
+      this.state = { ...this.state, identity: result.value, connectionKind: saved ? "resumed" : "new" };
       const observed = this.adapter.observe({ type: "session.observe", session: result.value }, (event) => {
         if (this.current(epoch)) this.update(reduceNativeEvent(this.state, event));
       });
@@ -186,6 +211,6 @@ export class NativeSessionService {
 
   async dispose(): Promise<void> {
     this.disposed = true;
-    try { await this.close(); } finally { this.listeners.clear(); }
+    try { await this.close(); await Promise.allSettled([...this.localOperations]); } finally { this.listeners.clear(); }
   }
 }
