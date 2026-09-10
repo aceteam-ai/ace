@@ -14,14 +14,7 @@ export interface ProviderInfo {
  * 4. Ollama running locally
  */
 export async function detectProvider(): Promise<ProviderInfo> {
-  // AceTeam Fabric key
   const config = loadConfig();
-  if (config.fabric_api_key && config.fabric_url) {
-    return {
-      provider: "aceteam",
-      detail: config.fabric_url,
-    };
-  }
 
   // OpenAI (env var or config)
   if (process.env.OPENAI_API_KEY || config.api_keys?.openai) {
@@ -48,6 +41,11 @@ export async function detectProvider(): Promise<ProviderInfo> {
     };
   }
 
+  // Fabric credentials support remote workflows, but cannot authenticate the
+  // local Python LLM runtime.
+  if (config.fabric_api_key && config.fabric_url) {
+    return { provider: "aceteam", detail: config.fabric_url };
+  }
   return { provider: null };
 }
 
@@ -82,11 +80,11 @@ export async function detectOllama(): Promise<string | null> {
 export function providerLabel(info: ProviderInfo): string {
   switch (info.provider) {
     case "aceteam":
-      return `AceTeam Fabric (${info.detail})`;
+      return `AceTeam Fabric (${info.detail}; remote workflows only)`;
     case "openai":
-      return `OpenAI (${info.model})`;
+      return `OpenAI (${info.model ?? "configured"})`;
     case "anthropic":
-      return `Anthropic (${info.model})`;
+      return `Anthropic (${info.model ?? "configured"})`;
     case "ollama":
       return `Ollama local (${info.model})`;
     default:

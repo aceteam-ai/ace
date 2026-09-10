@@ -10,6 +10,7 @@ import {
   readInputFile,
   runPattern,
   runBatch,
+  scanInputDir,
   writeOutput,
   getUserPatternsDir,
 } from "../utils/patterns.js";
@@ -179,6 +180,13 @@ export const runCommand = new Command("run")
         process.exit(1);
       }
 
+      // A quoted multi-word argument is unambiguously free text. Keep
+      // single-token unknown names as task typos so mistakes stay actionable.
+      if (!inlineText && /\s/.test(patternName) && !options.file && !options.inputDir) {
+        inlineText = patternName;
+        patternName = "summarize";
+      }
+
       // ── Workflow mode (.json file) ─────────────────────
       if (isWorkflowFile(patternName)) {
         if (!existsSync(patternName)) {
@@ -292,16 +300,18 @@ export const runCommand = new Command("run")
         process.exit(1);
       }
 
-      // ── Ensure Python + aceteam-nodes ──────────────────
-      const pythonPath = await ensurePython();
-
       // ── Batch mode (folder → folder) ──────────────────
       if (options.inputDir) {
         if (!options.outputDir) {
           output.error("--output-dir is required with --input-dir");
           process.exit(1);
         }
-
+        try { scanInputDir(options.inputDir); }
+        catch (err) {
+          output.error(err instanceof Error ? err.message : String(err));
+          process.exit(1);
+        }
+        const pythonPath = await ensurePython();
         await runBatch(pythonPath, pattern, options.inputDir, {
           outputDir: options.outputDir,
           model: options.model,
@@ -335,6 +345,9 @@ export const runCommand = new Command("run")
         console.log(chalk.dim("       echo \"text\" | ace run <task>"));
         process.exit(1);
       }
+
+      // Bootstrap only after the complete invocation has been validated.
+      const pythonPath = await ensurePython();
 
       // ── Execute pattern via aceteam-nodes ──────────────
       const spinner = ora(`Running ${pattern.name}...`).start();
