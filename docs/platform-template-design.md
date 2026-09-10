@@ -32,15 +32,20 @@ or deployed catalog contents are assumed.
 - A normal result may be JSON or `text/event-stream`. Final JSON fields are
   `runId`, `output`, `error`, `workflowVersionId`, and `lowCredits`. Correlate
   the returned version ID with the authorized graph version. An empty error
-  container is normal; inspect nonempty entries in `workflow_errors` and
-  `node_errors` to distinguish failed execution from success.
+  container is normal. `workflow_errors` is an array and `node_errors` maps
+  node identifiers to error arrays. Any nonempty error array indicates failure,
+  including redacted `null` entries; an absent error message is not success.
+  Preserve supported string and node/message error entries without requiring
+  private error details.
 - SSE uses JSON data with a `type` discriminator. `start` may provide a `jobId`;
   progress events are optional. `complete` carries the final result fields.
   `error` or `cancelled` can be followed by `complete`: terminal failure or
   cancellation is sticky and cannot become success. Retain available run/job IDs
   separately, without assuming they are interchangeable.
 - A credit refusal is HTTP 402. Authentication/authorization/rate-limit failures
-  remain 401/403/429. Show useful bounded status information; do not invent
+  remain 401/403/429. A server/proxy timeout or 5xx after a run POST can leave
+  execution uncertain; preserve its HTTP status and do not automatically retry.
+  Show useful bounded status information; do not invent
   required scope names, change grants, or select another organization.
 
 ## Authentication and transport
