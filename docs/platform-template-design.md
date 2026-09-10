@@ -22,7 +22,12 @@ or deployed catalog contents are assumed.
   organizations, or fall through to execution to work around a failed read.
 - After successful graph authorization and input validation, remote execution is
   `POST /api/workflow-engine/run/{uuid}/{N}` with the input object itself as JSON.
-  Pin the reviewed version; the unversioned route can resolve a newer version.
+  Pin the selected version record; the unversioned route can resolve a newer version.
+  A version record can be updated without changing its number or ID. The current
+  run interface has no graph-hash or conditional-write precondition, so this pins
+  record identity, not the exact graph bytes previously displayed. Local runs use
+  their fetched graph snapshot; remote runs use the platform's stored content at
+  execution time. A second read cannot eliminate that server-side race.
   Do not wrap the input as `{input:...}` or submit a graph in its place.
 - A normal result may be JSON or `text/event-stream`. Final JSON fields are
   `runId`, `output`, `error`, `workflowVersionId`, and `lowCredits`. Correlate
@@ -117,8 +122,10 @@ Markdown renderer; never treat progress text as an instruction.
   run action submits work. Local bundled templates remain available offline.
 
 Use an injected platform service in the panel. Reuse the existing typed workflow
-form and terminal rendering; preserve displayed defaults and immutable reviewed
-version/input through execution. Do not add a background catalog fetch to the
+form and terminal rendering; preserve displayed defaults, selected version
+identity, and immutable reviewed input through execution. Remote confirmation
+explains that the platform executes stored version content, which may change;
+it does not promise execution of the exact locally reviewed graph snapshot. Do not add a background catalog fetch to the
 startup path or silently download platform graphs into the bundled registry.
 
 ## Verification and remaining scope
