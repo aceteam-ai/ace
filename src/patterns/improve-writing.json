@@ -1,0 +1,50 @@
+{
+  "name": "Improve Writing",
+  "description": "Improve clarity, grammar, and style",
+  "input_node": {
+    "id": "input",
+    "type": "Input",
+    "params": {
+      "fields": {
+        "prompt": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "output_node": {
+    "id": "output",
+    "type": "Output",
+    "params": {
+      "fields": {
+        "response": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "inner_nodes": [
+    {
+      "id": "llm",
+      "type": "LLM",
+      "params": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a professional editor. Improve the input text for clarity, grammar, and readability.\n\nGuidelines:\n- Fix grammatical errors and typos\n- Improve sentence structure and flow\n- Maintain the author's voice and intent\n- Keep technical terminology accurate\n- Preserve the original meaning — do not add new ideas\n\nOutput the improved text first, then add a brief \"## Changes Made\" section listing the key improvements."
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source_id": "input",
+      "source_key": "prompt",
+      "target_id": "llm",
+      "target_key": "prompt"
+    },
+    {
+      "source_id": "llm",
+      "source_key": "response",
+      "target_id": "output",
+      "target_key": "response"
+    }
+  ]
+}

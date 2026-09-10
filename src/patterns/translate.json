@@ -1,0 +1,50 @@
+{
+  "name": "Translate",
+  "description": "Translate text to English (or specify target language)",
+  "input_node": {
+    "id": "input",
+    "type": "Input",
+    "params": {
+      "fields": {
+        "prompt": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "output_node": {
+    "id": "output",
+    "type": "Output",
+    "params": {
+      "fields": {
+        "response": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "inner_nodes": [
+    {
+      "id": "llm",
+      "type": "LLM",
+      "params": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a professional translator. Translate the input text to English.\n\nGuidelines:\n- Preserve the original meaning, tone, and intent\n- Maintain formatting (paragraphs, lists, headers)\n- For technical terms, provide the translation with the original in parentheses on first use\n- If the text is already in English, respond with the text as-is and note \"Text is already in English\"\n- If a target language is specified in the input (e.g., \"translate to Spanish:\"), translate to that language instead\n\nOutput only the translated text, with no additional commentary."
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source_id": "input",
+      "source_key": "prompt",
+      "target_id": "llm",
+      "target_key": "prompt"
+    },
+    {
+      "source_id": "llm",
+      "source_key": "response",
+      "target_id": "output",
+      "target_key": "response"
+    }
+  ]
+}

@@ -8,6 +8,7 @@ import {
   listNodes,
 } from "../utils/python.js";
 import { validateNodeTypes } from "../utils/node-cache.js";
+import { getWorkflowInputFields, parseWorkflowGraph, parseWorkflowParameter } from "../utils/workflow-graph.js";
 import { TEMPLATES, getTemplateById } from "../templates/index.js";
 import * as output from "../utils/output.js";
 import { ensurePython } from "../utils/ensure-python.js";
@@ -54,6 +55,16 @@ workflowCommand
         "Invalid workflow: missing required fields (input_node, inner_nodes, output_node, edges)"
       );
       process.exit(1);
+    }
+
+    if (isV2) {
+      try {
+        parseWorkflowGraph(jsonData);
+      } catch (err) {
+        output.error(err instanceof Error ? err.message : String(err));
+        process.exitCode = 1;
+        return;
+      }
     }
 
     // Full validation via Python
@@ -142,7 +153,7 @@ workflowCommand
       ["ID", "Name", "Category", "Inputs"],
       templates.map((t) => [
         t.id,
-        t.name,
+        t.name + (t.runtimeWarning ? " (authoring example)" : ""),
         t.category,
         t.inputs.join(", "),
       ])
@@ -184,15 +195,13 @@ workflowCommand
         return;
       }
 
+      if (template.runtimeWarning) output.warn(template.runtimeWarning);
+
       // Load template workflow JSON
       const workflow = structuredClone(template.workflow);
 
       // Prompt for node parameter customization (v2: inner_nodes)
-      const nodes = (workflow.inner_nodes || workflow.nodes || []) as Array<{
-        id: string;
-        type: string;
-        params: Record<string, string>;
-      }>;
+      const nodes = workflow.inner_nodes;
 
       if (nodes.length > 0) {
         console.log(chalk.bold("\nCustomize node parameters (Enter to keep default):\n"));
@@ -201,11 +210,15 @@ workflowCommand
           if (node.params && Object.keys(node.params).length > 0) {
             console.log(`  ${chalk.cyan(node.type)} (${node.id}):`);
             for (const [key, defaultVal] of Object.entries(node.params)) {
-              const answer = await rl.question(
-                `    ${key} [${defaultVal}]: `
-              );
-              if (answer.trim()) {
-                node.params[key] = answer.trim();
+              while (true) {
+                const display = typeof defaultVal === "string" ? defaultVal : JSON.stringify(defaultVal);
+                const answer = await rl.question(`    ${key} [${display}]: `);
+                try {
+                  node.params[key] = parseWorkflowParameter(answer, defaultVal);
+                  break;
+                } catch (err) {
+                  output.error(err instanceof Error ? err.message : String(err));
+                }
               }
             }
           }
@@ -219,10 +232,7 @@ workflowCommand
       output.success(`Created ${outputPath}`);
 
       // Build a helpful run command
-      const inputNode = workflow.input_node as
-        | { params?: { fields?: Record<string, unknown> } }
-        | undefined;
-      const inputNames = Object.keys(inputNode?.params?.fields ?? {});
+      const inputNames = Object.keys(getWorkflowInputFields(workflow));
       const inputArgs = inputNames
         .map((name) => `${name}='...'`)
         .join(" --input ");
