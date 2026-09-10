@@ -1,6 +1,6 @@
 import { constants, type BigIntStats } from "node:fs";
 import { lstat, mkdir, open, realpath, rename, unlink, type FileHandle } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -34,7 +34,8 @@ export type SessionStoreErrorCode =
   | "corrupt_state" | "unsupported_version" | "unsafe_storage"
   | "store_busy" | "stale_lock" | "state_limit" | "identity_mismatch"
   | "workspace_unavailable" | "record_not_found" | "invalid_identity"
-  | "aborted" | "storage_error" | "state_not_corrupt" | "lock_cleanup_failed";
+  | "aborted" | "storage_error" | "state_not_corrupt" | "lock_cleanup_failed"
+  | "session_busy" | "stale_session_owner" | "unknown_session_owner" | "ownership_lost";
 
 export class SessionStoreError extends Error {
   constructor(
@@ -56,6 +57,21 @@ export interface SessionStoreOptions {
 export interface SessionStoreWriteOptions {
   signal?: AbortSignal;
 }
+
+export interface SessionRegistrationOptions extends SessionStoreWriteOptions {
+  expectedWorkspace?: WorkspaceIdentity;
+}
+
+export type NativeSessionOwnerState = "available" | "active" | "stale" | "unknown";
+export interface NativeSessionOwnership {
+  /** A durable owner was established, but shared-lock cleanup needs recovery. */
+  warning?: SessionStoreError;
+  release(): Promise<void>;
+}
+
+type NativeSessionKey = { adapterId: string; nativeSessionId: string };
+interface SessionOwner { version: 1; pid: number; nonce: string }
+
 
 function errorCode(error: unknown): string | undefined {
   return typeof error === "object" && error !== null && "code" in error
@@ -101,7 +117,7 @@ function key(record: Pick<NativeSessionRecord, "adapterId" | "sessionId">): stri
   return `${record.adapterId}\0${record.sessionId}`;
 }
 
-function sameWorkspace(left: WorkspaceIdentity, right: WorkspaceIdentity): boolean {
+export function sameWorkspace(left: WorkspaceIdentity, right: WorkspaceIdentity): boolean {
   return left.realPath === right.realPath &&
     left.fileIdentity?.device === right.fileIdentity?.device &&
     left.fileIdentity?.inode === right.fileIdentity?.inode;
@@ -168,7 +184,7 @@ export class NativeSessionStore {
   async rememberCreatedSession(
     identity: NativeHarnessSessionIdentity,
     workspace: string,
-    options: SessionStoreWriteOptions = {},
+    options: SessionRegistrationOptions = {},
   ): Promise<NativeSessionRecord> {
     if (!identifier(identity.adapterId, 64) || !identifier(identity.sessionId) || !identifier(identity.nativeSessionId)) {
       throw new SessionStoreError("invalid_identity", "A successful native session identity is required before registration.");
@@ -178,9 +194,16 @@ export class NativeSessionStore {
       sessionId: identity.sessionId,
       nativeSessionId: identity.nativeSessionId,
     };
+    const expectedWorkspace = options.expectedWorkspace && structuredClone(options.expectedWorkspace);
+    if (expectedWorkspace && !validWorkspace(expectedWorkspace)) {
+      throw new SessionStoreError("invalid_identity", "The expected workspace identity is invalid.");
+    }
     checkAbort(options.signal);
-    const canonicalWorkspace = await captureWorkspaceIdentity(workspace);
     return this.withLock(options.signal, async () => {
+      const canonicalWorkspace = await captureWorkspaceIdentity(workspace);
+      if (expectedWorkspace && !sameWorkspace(expectedWorkspace, canonicalWorkspace)) {
+        throw new SessionStoreError("identity_mismatch", "The workspace changed while the native session was opening. This session was not registered.");
+      }
       const document = await this.readDocument();
       const existing = document.records.find((record) => key(record) === key(registered));
       if (existing && (existing.nativeSessionId !== registered.nativeSessionId || !sameWorkspace(existing.workspace, canonicalWorkspace))) {
@@ -220,10 +243,17 @@ export class NativeSessionStore {
     return record;
   }
 
-  async forget(selection: { adapterId: string; sessionId: string }, options: SessionStoreWriteOptions = {}): Promise<boolean> {
+  async forget(selection: { adapterId: string; sessionId: string }, options: SessionStoreWriteOptions & { requireUnowned?: boolean } = {}): Promise<boolean> {
     return this.withLock(options.signal, async () => {
       const document = await this.readDocument();
       const previous = document.records.length;
+      const selected = document.records.find((record) => key(record) === key(selection));
+      if (selected && options.requireUnowned) {
+        const ownership = await this.readOwner(this.ownerPath(selected));
+        if (ownership.state === "active" || ownership.state === "unknown") {
+          throw new SessionStoreError("session_busy", "Close or resolve the owning connection before forgetting this registration.");
+        }
+      }
       document.records = document.records.filter((record) => key(record) !== key(selection));
       if (document.records.length === previous) return false;
       checkAbort(options.signal);
@@ -252,6 +282,102 @@ export class NativeSessionStore {
       }
       throw new SessionStoreError("state_not_corrupt", "The session state is valid. Forget specific registrations instead of resetting it.");
     });
+  }
+
+  /** Cross-process local ownership coordinates managed Ace connections, not native grants. */
+  async inspectOwnership(identity: NativeSessionKey): Promise<NativeSessionOwnerState> {
+    await this.ensureDirectory();
+    return (await this.readOwner(this.ownerPath(identity))).state;
+  }
+
+  async acquireOwnership(
+    identity: NativeSessionKey,
+    options: SessionStoreWriteOptions & { recoverStale?: boolean } = {},
+  ): Promise<NativeSessionOwnership> {
+    const path = this.ownerPath(identity);
+    const owner: SessionOwner = { version: 1, pid: process.pid, nonce: randomUUID() };
+    let established: NativeSessionOwnership | undefined;
+    try {
+      return await this.withLock(options.signal, async () => {
+        const existing = await this.readOwner(path);
+        if (existing.state === "active") throw new SessionStoreError("session_busy", "Another Ace connection owns this native session. Close that connection before resuming.", path);
+        if (existing.state === "unknown") throw new SessionStoreError("unknown_session_owner", "The native session owner is unknown. Inspect its private owner file; do not remove an active or unknown owner.", path);
+        if (existing.state === "stale") {
+          if (!options.recoverStale) throw new SessionStoreError("stale_session_owner", "The previous native session owner exited. Select this saved session explicitly to recover its ownership and resume.", path);
+          // All cooperating owner changes require this same write lock. No TTL stealing.
+          await unlink(path);
+        }
+        checkAbort(options.signal);
+        let file: FileHandle | undefined;
+        let created = false;
+        try {
+          file = await open(path, "wx", 0o600);
+          created = true;
+          await file.writeFile(JSON.stringify(owner), "utf8");
+          await file.sync();
+          await file.close();
+          file = undefined;
+          checkAbort(options.signal);
+        } catch {
+          await file?.close().catch(() => {});
+          if (created) await unlink(path).catch(() => {});
+          checkAbort(options.signal);
+          throw new SessionStoreError("storage_error", "Could not establish private native session ownership.", path);
+        }
+        let released = false;
+        let releasing: Promise<void> | undefined;
+        established = {
+          release: () => {
+            if (released) return Promise.resolve();
+            if (releasing) return releasing;
+            releasing = this.withLock(undefined, async () => {
+              const current = await this.readOwner(path);
+              if (current.state === "available") { released = true; return; }
+              if (current.owner?.pid !== owner.pid || current.owner.nonce !== owner.nonce) {
+                throw new SessionStoreError("ownership_lost", "Native session ownership changed. Another owner's file was left untouched.", path);
+              }
+              await unlink(path);
+              released = true;
+            }).finally(() => { releasing = undefined; });
+            return releasing;
+          },
+        };
+        return established;
+      });
+    } catch (error) {
+      if (established && error instanceof SessionStoreError && error.code === "lock_cleanup_failed") {
+        established.warning = error;
+        return established; // Preserve the handle for an owner that was already committed.
+      }
+      throw error;
+    }
+  }
+
+  private ownerPath(identity: NativeSessionKey): string {
+    if (!identifier(identity.adapterId, 64) || !identifier(identity.nativeSessionId)) {
+      throw new SessionStoreError("invalid_identity", "A provider and native session identity are required for local ownership.");
+    }
+    const hash = createHash("sha256").update(`${identity.adapterId}\0${identity.nativeSessionId}`).digest("hex");
+    return join(this.directory, `native-owner-${hash}.json`);
+  }
+
+  private async readOwner(path: string): Promise<{ state: NativeSessionOwnerState; owner?: SessionOwner }> {
+    let content: string | null;
+    try { content = await this.readPrivateFile(path, 1024); }
+    catch (error) {
+      if (error instanceof SessionStoreError && error.code === "corrupt_state") return { state: "unknown" };
+      throw error;
+    }
+    if (content === null) return { state: "available" };
+    let value: unknown;
+    try { value = JSON.parse(content); } catch { return { state: "unknown" }; }
+    if (!object(value) || !exactKeys(value, ["version", "pid", "nonce"]) || value.version !== 1 ||
+        !Number.isSafeInteger(value.pid) || (value.pid as number) <= 0 || !identifier(value.nonce, 128)) {
+      return { state: "unknown" };
+    }
+    const owner = value as unknown as SessionOwner;
+    try { process.kill(owner.pid, 0); return { state: "active", owner }; }
+    catch (error) { return { state: errorCode(error) === "ESRCH" ? "stale" : "unknown", owner }; }
   }
 
   private async ensureDirectory(): Promise<void> {

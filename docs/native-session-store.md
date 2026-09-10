@@ -1,9 +1,8 @@
 # Local native session identity store
 
-This is the persistence foundation for [#15](https://github.com/aceteam-ai/ace/issues/15).
-It does not start or resume a native process. Full restart/resume additionally
-requires the shared terminal UI and a native adapter that verifies current
-protocol support, authentication, and available native history.
+This is the persistence boundary for [#15](https://github.com/aceteam-ai/ace/issues/15).
+The store does not start a native process. The [session manager and verified
+Codex resume](native-session-resume.md) connect it to the shared terminal UI.
 
 Store a record only after an Ace-created native session has successfully
 started. Records are locally registered provenance, not cryptographic proof.
@@ -62,3 +61,20 @@ native session from running; show that restart/resume registration is unavailabl
 
 Tests use synthetic identities and temporary directories, with no credentials,
 model calls, native process execution, or personal transcript fixtures.
+
+
+Managed connections use separate `native-owner-<hash>.json` files with only a
+version, PID, and random owner nonce. The filename hashes provider/native identity.
+Ownership changes share the state write lock, so competing Ace processes cannot
+both acquire a managed native session. Active or unknown owners reject resume;
+only explicit resume can recover an owner PID confirmed absent. There is no TTL
+or claim of excluding non-Ace native clients. Ownership remains held between turns
+and through navigation, until native disposal confirms owned-resource cleanup.
+Release is idempotent and never removes another nonce's file. A failed shared-lock
+cleanup after successful acquisition returns the committed ownership handle with
+a warning, so it is still available for eventual disposal.
+
+`forget(selection, {requireUnowned: true})` checks ownership and removes the
+registration under the same write lock. This prevents an acquisition between an
+eligibility check and deletion. A creation-time workspace precondition prevents
+registration if the selected directory changed while the native session opened.

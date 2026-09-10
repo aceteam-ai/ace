@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
-import { NativeSessionStore, SessionStoreError } from "../../src/harness/session-store.js";
+import { NativeSessionStore, SessionStoreError, captureWorkspaceIdentity } from "../../src/harness/session-store.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -283,5 +283,90 @@ describe("atomic read integrity", () => {
     data[marker] = 255;
     await writeFile(store.statePath, data);
     await expect(store.list()).rejects.toMatchObject({ code: "corrupt_state" });
+  });
+});
+
+
+describe("native connection ownership", () => {
+  const native = { adapterId: "codex", nativeSessionId: "synthetic-native" };
+  const ownerPath = async () => join(store.directory, (await readdir(store.directory)).find((name) => name.startsWith("native-owner-"))!);
+
+  it("excludes concurrent managers until idempotent disposal releases ownership", async () => {
+    const other = new NativeSessionStore({ directory: store.directory });
+    const lease = await store.acquireOwnership(native);
+    expect(await other.inspectOwnership(native)).toBe("active");
+    await expect(other.acquireOwnership(native, { recoverStale: true })).rejects.toMatchObject({ code: "session_busy" });
+    const path = await ownerPath();
+    const bytes = await readFile(path, "utf8");
+    expect(Object.keys(JSON.parse(bytes)).sort()).toEqual(["nonce", "pid", "version"]);
+    expect(bytes).not.toContain(native.nativeSessionId);
+    if (process.platform !== "win32") expect((await lstat(path)).mode & 0o777).toBe(0o600);
+    await Promise.all([lease.release(), lease.release()]);
+    await lease.release();
+    expect(await other.inspectOwnership(native)).toBe("available");
+    const next = await other.acquireOwnership(native);
+    await next.release();
+  });
+
+  it("allows only explicit recovery of a confirmed dead owner under the shared lock", async () => {
+    await store.acquireOwnership(native);
+    const path = await ownerPath();
+    await writeFile(path, JSON.stringify({ version: 1, pid: 2147483647, nonce: "synthetic-old" }));
+    const kill = process.kill.bind(process);
+    vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid === 2147483647) throw Object.assign(new Error("absent"), { code: "ESRCH" });
+      return kill(pid, signal);
+    });
+    expect(await store.inspectOwnership(native)).toBe("stale");
+    await expect(store.acquireOwnership(native)).rejects.toMatchObject({ code: "stale_session_owner" });
+    const lease = await store.acquireOwnership(native, { recoverStale: true });
+    expect(JSON.parse(await readFile(path, "utf8")).pid).toBe(process.pid);
+    await lease.release();
+  });
+
+  it("never steals unknown, malformed, or changed owner files", async () => {
+    const lease = await store.acquireOwnership(native);
+    const path = await ownerPath();
+    await writeFile(path, JSON.stringify({ version: 1, pid: process.pid, nonce: "another-owner" }));
+    await expect(lease.release()).rejects.toMatchObject({ code: "ownership_lost" });
+    expect(await readFile(path, "utf8")).toContain("another-owner");
+    await writeFile(path, "synthetic-corrupt-owner");
+    expect(await store.inspectOwnership(native)).toBe("unknown");
+    await expect(store.acquireOwnership(native, { recoverStale: true })).rejects.toMatchObject({ code: "unknown_session_owner" });
+    expect(await readFile(path, "utf8")).toBe("synthetic-corrupt-owner");
+    await writeFile(path, JSON.stringify({ version: 1, pid: process.pid, nonce: "synthetic" }));
+    vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("denied"), { code: "EPERM" }); });
+    expect(await store.inspectOwnership(native)).toBe("unknown");
+    await expect(store.acquireOwnership(native, { recoverStale: true })).rejects.toMatchObject({ code: "unknown_session_owner" });
+  });
+
+  it("has one winner when independent owners acquire concurrently", async () => {
+    const other = new NativeSessionStore({ directory: store.directory });
+    const results = await Promise.allSettled([store.acquireOwnership(native), other.acquireOwnership(native)]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    for (const result of results) if (result.status === "fulfilled") await result.value.release();
+  });
+
+  it("retains a cleanup handle and warning when ownership committed before lock cleanup failed", async () => {
+    vi.mocked(unlink).mockRejectedValueOnce(Object.assign(new Error("hidden"), { code: "EIO" }));
+    const lease = await store.acquireOwnership(native);
+    expect(lease.warning?.code).toBe("lock_cleanup_failed");
+    expect(await store.inspectOwnership(native)).toBe("active");
+    // Explicit synthetic recovery of the shared lock, then ordinary owner cleanup.
+    await rm(store.lockPath);
+    await lease.release();
+    expect(await store.inspectOwnership(native)).toBe("available");
+  });
+
+  it("does not register a workspace replaced while a native session was starting", async () => {
+    const expectedWorkspace = await captureWorkspaceIdentity(workspace);
+    await rename(workspace, join(root, "before-start"));
+    await mkdir(workspace);
+    if (expectedWorkspace.fileIdentity) {
+      await expect(store.rememberCreatedSession(identity(), workspace, { expectedWorkspace }))
+        .rejects.toMatchObject({ code: "identity_mismatch" });
+      expect(await store.list()).toEqual([]);
+    }
   });
 });

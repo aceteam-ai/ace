@@ -64,6 +64,8 @@ export interface RespondToApprovalCommand extends CorrelatedCommand {
 
 export interface ResumeSessionCommand extends CorrelatedCommand {
   type: "session.resume";
+  /** Original local registration. Production resume requires this; sessionId is a fresh connection. */
+  registeredSessionId?: string;
   sessionId: string;
   nativeSessionId: string;
   workspace: string;
