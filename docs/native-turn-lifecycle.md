@@ -23,7 +23,10 @@ Add two event variants:
 All events retain adapter, local/native session identity, sequence, timestamp,
 and correlation metadata. Turn-related events can additionally carry a native
 turn ID in their shared envelope. Approval correlation still identifies the
-specific request; it is not replaced by a turn ID.
+specific request; it is not replaced by a turn ID. Native request IDs must remain
+unique within a connection because the native resolution notification omits a
+turn ID. Ambiguous native request ID reuse fails closed; native item IDs can be
+reused in different turns.
 
 `session.completed`, `session.cancelled`, and `session.error` remain terminal for
 the local session. No ready-state update can reopen them. Disposal invalidates the
@@ -52,9 +55,11 @@ IDs, and turn IDs remain separate; reused native request IDs cannot match a prio
 local approval. Unknown native states never become a successful turn.
 
 A terminal turn notification can precede its start or interrupt RPC response.
-That matching outcome settles the corresponding command without replaying it;
-a late response cannot affect a later turn, and a timeout for a superseded RPC
-must not kill a healthy next turn. A turn whose start response is missing and
+A matching outcome proves input acceptance; only an interrupted outcome proves
+interrupt acceptance without its RPC acknowledgment. Normal completion/failure
+instead retires that interrupt request and reports it is no longer applicable.
+A late response cannot affect a later turn, and neither RPC nor write timers for
+a superseded request may kill a healthy next turn. A turn whose start response is missing and
 whose native acceptance is unproven still fails with an unknown outcome.
 
 Before notifying turn-completion observers, invalidate the old turn's approvals.

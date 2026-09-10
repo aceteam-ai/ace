@@ -1,8 +1,9 @@
 # Codex native adapter
 
 `CodexNativeHarnessAdapter` implements the internal harness contract from #12 for
-one local Ace-created Codex thread and one text turn (#13). It is a building block
-for the shared terminal interface in #14; this slice adds no CLI command or new
+one local Ace-created Codex thread (#13), extended with successive explicit text
+turns by the [reviewed #14 lifecycle amendment](native-turn-lifecycle.md). It is a
+building block for the shared terminal interface in #14; this slice adds no CLI command or new
 terminal application. Existing workflow commands still use their existing path.
 
 ## Supported lifecycle
@@ -10,8 +11,8 @@ terminal application. Existing workflow commands still use their existing path.
 Create an adapter, call `start`, observe its returned identity, then call
 `sendInput`. Only one session may exist in an adapter at a time. `start` creates a
 new native thread; it never reads, attaches, resumes, forks, or imports another
-thread. `sendInput` reserves the one turn before sending it, so concurrent input
-cannot accidentally steer or create additional work.
+thread. `sendInput` requires ready state and reserves a turn before sending it,
+so concurrent input cannot accidentally steer or create additional work.
 
 ```ts
 import { CodexNativeHarnessAdapter } from "./src/harness/index.js";
@@ -28,7 +29,8 @@ const observation = adapter.observe(
   { type: "session.observe", session },
   (event) => {
     // Render conversation, tools, changes, approvals, and native permission context.
-    // A terminal session.completed, session.cancelled, or session.error ends this session.
+    // turn.completed ends only the turn; session.state: ready permits follow-up.
+    // session.completed, session.cancelled, or session.error ends this session.
   }
 );
 const submitted = await adapter.sendInput({
@@ -36,22 +38,35 @@ const submitted = await adapter.sendInput({
   session,
   input: "Explain the project structure.",
 });
-// Keep observing until a terminal event or the user closes the session.
+// Keep the same observation across turns; send follow-up input only while ready.
 // On close, remove observation and await adapter.dispose({ type: "session.dispose", session }).
 ```
 
 A successful command result means native request acceptance, not task completion.
-`turn/completed` maps to `session.completed`, `session.cancelled`, or
-`session.error`; unknown terminal statuses produce an explicit protocol error.
-The current S1 contract makes these events terminal. Further input requires
-`dispose` and `start` with a new local session ID. Multi-turn continuation and
-same-harness restart/resume are later slices; `resume` is explicitly unsupported.
+`turn.started` exposes the native turn ID once; `turn/completed` maps to
+`turn.completed` with `outcome: completed | interrupted | failed`. Native result
+and error details are retained. A completed turn expires its approvals, emits its
+outcome, and returns a healthy session to ready. Explicit follow-up input creates
+another turn on the same native thread, without spawning or authenticating again.
+Unknown terminal statuses produce a session protocol error.
+
+`session.completed`, `session.cancelled`, and `session.error` remain terminal for
+the local session. Transport/protocol failures end the Codex session; another
+ready notification cannot reopen it. A failed native turn allows further explicit
+input when it completes. A non-retrying native error notification stays busy until
+`turn/completed`, rather than inventing an early completion. There is no automatic
+retry or active-turn steering. Restart/resume remains explicitly unsupported.
 
 `interrupt` requires an acknowledged live turn and sends `turn/interrupt` once.
-Its acknowledgment does not fabricate cancellation: the native terminal outcome
-remains authoritative. Disposal clears observers and approvals immediately, closes
-pending RPCs, and stops only the owned app-server child. Shutdown sends SIGTERM,
-then SIGKILL after the configured grace period (one second by default).
+Its RPC acknowledgment does not fabricate cancellation: the native turn outcome
+remains authoritative. A native interrupted outcome can prove interruption even
+before that RPC response. If normal completion or failure arrives first, the
+obsolete request is retired and the command reports that the turn ended before
+acknowledgment. This does not prevent a follow-up turn.
+
+Disposal clears observers and approvals immediately, closes pending RPCs, and
+stops only the owned app-server child. Shutdown sends SIGTERM, then SIGKILL after
+the configured grace period (one second by default).
 
 ## Native authority and approval behavior
 
@@ -99,7 +114,12 @@ with `decision: "expired"` means the native request ended without an Ace reply;
 `decisionSubmitted: true`; this does not assert that execution succeeded. Pending
 requests expire on interruption, native resolution, item/turn completion,
 disconnect, error, or disposal. Old replies and reused local session IDs are never
-replayed, including when a later child reuses a native request ID.
+replayed, including when a later child reuses a native request ID. Within a single
+connection, native JSON-RPC request IDs must remain unique: reuse fails closed
+because `serverRequest/resolved` identifies only a thread and request, making a
+late resolution ambiguous across turns. Native item IDs may repeat in different
+turns. Late events for completed turns cannot affect a later turn or reopen an
+approval prompt.
 
 ## Events and failure handling
 
@@ -127,8 +147,10 @@ Startup/RPC/write timeouts default to 30 seconds. Malformed messages, unsupporte
 required fields, unknown responses, truncated output, and frames over 1 MiB fail
 closed. A timeout or disconnect can leave the native operation's outcome unknown;
 the adapter never retries or resubmits automatically. A native terminal result for
-the active turn can establish acceptance even if it precedes the corresponding
-RPC response.
+the active turn can establish input acceptance even if it precedes the corresponding
+RPC response. That evidence settles both the obsolete RPC timer and its pending
+write timer; late replies cannot alter a later turn. Completed/failed work alone
+does not establish interrupt acceptance.
 
 ## Version evidence and verification
 

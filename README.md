@@ -262,10 +262,11 @@ pnpm test:integration
 
 ## Native harness development
 
-The internal [Codex adapter](docs/codex-adapter.md) supports one Ace-created native
-thread and one turn using Codex CLI 0.153.4. It preserves native authentication and
-permissions and has credential-free synthetic tests. Shared terminal integration
-and restart/resume are subsequent slices; no new CLI command is exposed yet.
+The internal [Codex adapter](docs/codex-adapter.md) supports successive explicit
+turns in one Ace-created native thread using Codex CLI 0.153.4. It preserves native
+authentication and permissions and has credential-free synthetic tests. The
+[turn lifecycle amendment](docs/native-turn-lifecycle.md) prepares shared terminal
+integration; restart/resume is a subsequent slice. No new CLI command is exposed yet.
 
 ## Related
 

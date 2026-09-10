@@ -130,6 +130,8 @@ describe("FakeNativeHarnessAdapter", () => {
     expect(delta.status).toBe("ok");
     expect(completion.status).toBe("ok");
     expect(listener.mock.calls.map(([event]) => event.type)).toEqual([
+      "turn.started",
+      "session.state",
       "conversation.message",
       "conversation.delta",
       "session.completed",
@@ -145,12 +147,9 @@ describe("FakeNativeHarnessAdapter", () => {
       (event) => events.push(event)
     );
 
-    const interrupt = await adapter.interrupt({
-      type: "session.interrupt",
-      session,
-      reason: "User cancelled",
-      correlationId: "turn-1",
-    });
+    const interrupt = adapter.emit(session, {
+      type: "session.cancelled", reason: "User cancelled",
+    }, "turn-1");
     const input = await adapter.sendInput({
       type: "session.input",
       session,
@@ -632,4 +631,82 @@ describe("FakeNativeHarnessAdapter", () => {
       code: "invalid_session",
     });
   });
+  it.each(["completed", "interrupted", "failed"] as const)("returns ready after a fake %s turn and accepts a second turn", async (outcome) => {
+    const adapter = new FakeNativeHarnessAdapter(); const session = await startSession(adapter, "multi-turn");
+    const events: NativeHarnessEvent[] = []; adapter.observe({ type: "session.observe", session }, (event) => events.push(event));
+    await adapter.sendInput({ type: "session.input", session, input: "First" });
+    const first = events.find((event) => event.type === "turn.started")!;
+    expect(await adapter.sendInput({ type: "session.input", session, input: "Busy" })).toMatchObject({ code: "invalid_state" });
+    expect(adapter.emit(session, { type: "turn.completed", nativeTurnId: first.nativeTurnId!, outcome })).toMatchObject({ status: "ok" });
+    expect(events.at(-1)).toMatchObject({ type: "session.state", state: "ready" });
+    expect(await adapter.sendInput({ type: "session.input", session, input: "Second" })).toMatchObject({ status: "ok" });
+    expect(events.filter((event) => event.type === "turn.started").map((event) => event.nativeTurnId)).toEqual(["native-multi-turn:turn-1", "native-multi-turn:turn-2"]);
+  });
+
+  it("interrupts the active fake turn without terminating the session", async () => {
+    const adapter = new FakeNativeHarnessAdapter(); const session = await startSession(adapter, "interrupt-turn");
+    const listener = vi.fn(); adapter.observe({ type: "session.observe", session }, listener);
+    expect(await adapter.interrupt({ type: "session.interrupt", session })).toMatchObject({ code: "invalid_state" });
+    await adapter.sendInput({ type: "session.input", session, input: "First" });
+    expect(await adapter.interrupt({ type: "session.interrupt", session })).toMatchObject({ status: "ok" });
+    expect(listener.mock.calls.map(([event]) => event)).toContainEqual(expect.objectContaining({ type: "turn.completed", outcome: "interrupted" }));
+    expect(await adapter.sendInput({ type: "session.input", session, input: "Second" })).toMatchObject({ status: "ok" });
+  });
+
+  it("expires fake turn approvals before completion callbacks and rejects reused IDs", async () => {
+    const adapter = new FakeNativeHarnessAdapter(); const session = await startSession(adapter, "approvals");
+    const events: NativeHarnessEvent[] = []; adapter.observe({ type: "session.observe", session }, (event) => events.push(event));
+    await adapter.sendInput({ type: "session.input", session, input: "First" });
+    const id = events[0].nativeTurnId!;
+    const payload = { type: "approval.requested" as const, approvalId: "request-one", prompt: "Synthetic approval", choices: ["allow", "deny"] };
+    adapter.emit(session, payload, "correlation-one");
+    const reply = { type: "approval.respond" as const, session, approvalId: payload.approvalId, correlationId: "correlation-one", decision: "allow" };
+    const results: Promise<unknown>[] = [];
+    adapter.observe({ type: "session.observe", session }, (event) => { if (event.type === "turn.completed") results.push(adapter.respondToApproval(reply), adapter.sendInput({ type: "session.input", session, input: "Too early" })); });
+    adapter.emit(session, { type: "turn.completed", nativeTurnId: id, outcome: "completed" });
+    expect(await Promise.all(results)).toEqual([expect.objectContaining({ code: "stale_approval" }), expect.objectContaining({ code: "invalid_state" })]);
+    await adapter.sendInput({ type: "session.input", session, input: "Second" });
+    expect(adapter.emit(session, payload, "correlation-one")).toMatchObject({ code: "stale_approval" });
+    expect(adapter.emit(session, { type: "turn.completed", nativeTurnId: id, outcome: "completed" })).toMatchObject({ code: "invalid_state" });
+  });
+
+  it("handles throwing/reentrant fake observers without leaving the turn stuck or corrupting order", async () => {
+    const adapter = new FakeNativeHarnessAdapter(); const session = await startSession(adapter, "observers");
+    const events: NativeHarnessEvent[] = []; const followups: Promise<unknown>[] = [];
+    adapter.observe({ type: "session.observe", session }, () => { throw new Error("Synthetic renderer failure"); });
+    adapter.observe({ type: "session.observe", session }, (event) => {
+      if (event.type === "session.state" && event.state === "ready") followups.push(adapter.sendInput({ type: "session.input", session, input: "Second" }));
+    });
+    adapter.observe({ type: "session.observe", session }, (event) => events.push(event));
+    await adapter.sendInput({ type: "session.input", session, input: "First" });
+    adapter.emit(session, { type: "turn.completed", nativeTurnId: events[0].nativeTurnId!, outcome: "completed" });
+    expect(await Promise.all(followups)).toEqual([expect.objectContaining({ status: "ok" })]);
+    expect(events.map((event) => event.sequence)).toEqual(events.map((event) => event.sequence).sort((a, b) => a - b));
+    expect(events.filter((event) => event.type === "turn.started")).toHaveLength(2);
+  });
+
+  it("keeps direct terminal fake events terminal even during turn completion", async () => {
+    const adapter = new FakeNativeHarnessAdapter(); const session = await startSession(adapter, "terminal-reentry");
+    const events: NativeHarnessEvent[] = []; adapter.observe({ type: "session.observe", session }, (event) => events.push(event));
+    await adapter.sendInput({ type: "session.input", session, input: "First" });
+    adapter.emit(session, { type: "approval.requested", approvalId: "pending", prompt: "Synthetic", choices: ["allow"] });
+    adapter.observe({ type: "session.observe", session }, (event) => { if (event.type === "approval.resolved") adapter.emit(session, { type: "session.cancelled" }); });
+    adapter.emit(session, { type: "turn.completed", nativeTurnId: events[0].nativeTurnId!, outcome: "completed" });
+    expect(events.at(-1)).toMatchObject({ type: "session.cancelled" });
+    expect(adapter.emit(session, { type: "session.state", state: "ready" })).toMatchObject({ code: "invalid_state" });
+    expect(await adapter.sendInput({ type: "session.input", session, input: "Too late" })).toMatchObject({ code: "invalid_state" });
+  });
+
+  it("does not attach old fake input to a reentrant follow-up turn", async () => {
+    const adapter = new FakeNativeHarnessAdapter(); const session = await startSession(adapter, "input-reentry");
+    const events: NativeHarnessEvent[] = []; const pending: Promise<unknown>[] = [];
+    adapter.observe({ type: "session.observe", session }, (event) => {
+      if (event.type === "session.state" && event.state === "running" && event.nativeTurnId?.endsWith("turn-1")) adapter.emit(session, { type: "turn.completed", nativeTurnId: event.nativeTurnId, outcome: "completed" });
+      if (event.type === "session.state" && event.state === "ready") pending.push(adapter.sendInput({ type: "session.input", session, input: "New input" }));
+    });
+    adapter.observe({ type: "session.observe", session }, (event) => events.push(event));
+    await adapter.sendInput({ type: "session.input", session, input: "Old input" }); await Promise.all(pending);
+    expect(events.filter((event) => event.type === "conversation.message")).toEqual([expect.objectContaining({ text: "New input", nativeTurnId: "native-input-reentry:turn-2" })]);
+  });
+
 });
