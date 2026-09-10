@@ -4,14 +4,14 @@ import { randomUUID } from "node:crypto";
 import {
   asCodexError, checkCodexVersion, CodexError, CodexRpc, object, rpcId,
   spawnCodex, stopChild, TESTED_CODEX_VERSION,
-  type CodexProcessFactory, type JsonObject, type RpcId,
+  type CodexProcessFactory, type CodexRpcCall, type JsonObject, type RpcId,
 } from "./codex-protocol.js";
 import type {
   CommandAccepted, DisposeSessionCommand, InterruptSessionCommand,
   NativeHarnessAdapter, NativeHarnessCapabilities, NativeHarnessCommandResult,
   NativeHarnessEvent, NativeHarnessEventListener, NativeHarnessEventPayload,
   NativeHarnessObservation, NativeHarnessRejectionCode, NativeHarnessSessionIdentity,
-  NativeHarnessSessionState, ObserveSessionCommand, RespondToApprovalCommand,
+  NativeHarnessSessionState, NativeHarnessTurnOutcome, ObserveSessionCommand, RespondToApprovalCommand,
   ResumeSessionCommand, SendInputCommand, SessionDisposed, StartSessionCommand,
 } from "./types.js";
 
@@ -37,6 +37,15 @@ interface PendingApproval {
   sentDecision?: string;
 }
 
+interface ActiveTurn {
+  id?: string;
+  started: boolean;
+  completed: boolean;
+  outcome?: NativeHarnessTurnOutcome;
+  startCall?: CodexRpcCall;
+  interruptCall?: CodexRpcCall;
+}
+
 interface Session {
   identity: NativeHarnessSessionIdentity;
   state: NativeHarnessSessionState | "terminal" | "disposed";
@@ -48,11 +57,13 @@ interface Session {
   rpc?: CodexRpc;
   child?: ChildProcessWithoutNullStreams;
   turnId?: string;
+  activeTurn?: ActiveTurn;
+  completedTurns: Set<string>;
   turnRequested: boolean;
   interruptRequested: boolean;
   permissions?: JsonObject;
   snapshot?: NativeHarnessEvent;
-  eventQueue: NativeHarnessEvent[];
+  eventQueue: Array<{ event: NativeHarnessEvent; after?: () => void }>;
   publishing: boolean;
   failure?: CodexError;
   cleanup?: Promise<void>;
@@ -87,7 +98,7 @@ function nativeError(error: JsonObject): CodexError {
     { nativeError: error });
 }
 
-/** One Ace-created thread and one turn. Terminal events end this session (S1 contract). */
+/** One Ace-created thread with successive explicit turns; session terminal events stay terminal. */
 export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
   readonly adapterId = "codex";
   readonly capabilities: NativeHarnessCapabilities = Object.freeze({
@@ -136,7 +147,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
       identity: { adapterId: this.adapterId, sessionId: command.sessionId },
       state: "starting", sequence: 0, listeners: new Set(), approvals: new Map(),
       seenRequests: new Set(), completedItems: new Set(), turnRequested: false,
-      interruptRequested: false, eventQueue: [], publishing: false,
+      interruptRequested: false, completedTurns: new Set(), eventQueue: [], publishing: false,
     };
     this.session = session;
     this.usedSessionIds.add(command.sessionId);
@@ -200,29 +211,33 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     const valid = this.validate(command.session);
     if (valid) return valid;
     const session = this.session!;
-    if (session.state !== "ready" || session.turnRequested) return rejected("invalid_state", "This session accepts one turn only, while ready.");
+    if (session.state !== "ready" || session.activeTurn) return rejected("invalid_state", "Input requires a ready session. Steering an active turn is unsupported.");
     if (!command.input.trim()) return rejected("invalid_state", "Input must contain text.");
-    session.turnRequested = true; // Reserve before awaiting or notifying observers.
+    const active: ActiveTurn = { started: false, completed: false };
+    session.activeTurn = active; // Reserve before awaiting or notifying observers.
+    session.turnId = undefined;
+    session.turnRequested = true;
+    session.interruptRequested = false;
+    session.completedItems.clear();
     this.state(session, "running", "turn/start", {}, command.correlationId);
     try {
-      const response = await session.rpc!.request("turn/start", {
+      this.assertOpen(session);
+      active.startCall = session.rpc!.beginRequest("turn/start", {
         threadId: session.identity.nativeSessionId,
         input: [{ type: "text", text: command.input, text_elements: [] }],
       });
+      const response = await active.startCall.result;
+      if (active.completed) return { status: "ok", value: { accepted: true } };
+      this.assertOpen(session);
       const turn = record(response.turn, "turn/start.turn");
-      const turnId = text(turn.id, "turn.id");
-      if (session.turnId && session.turnId !== turnId) throw new CodexError("incompatible_codex_protocol", "Codex returned a different turn ID.");
-      session.turnId = turnId;
-      if (session.failure) throw session.failure;
-      if (this.isDisposed(session)) throw new CodexError("codex_disconnected", "The session was disposed.");
-      if (!this.terminal(session)) {
-        if (turn.status === "inProgress") this.state(session, this.runningState(session), "inProgress", { turn });
-        else this.finishTurn(session, turn);
-      }
+      this.bindTurn(session, text(turn.id, "turn.id"));
+      if (active.completed) return { status: "ok", value: { accepted: true } };
+      this.assertOpen(session);
+      if (turn.status === "inProgress") this.state(session, this.runningState(session), "inProgress", { turn });
+      else this.finishTurn(session, turn);
       return { status: "ok", value: { accepted: true } };
     } catch (error) {
-      // A matching native terminal outcome proves acceptance even if it preceded the RPC response.
-      if (this.terminal(session) && !this.isDisposed(session) && !session.failure) return { status: "ok", value: { accepted: true } };
+      if (active.completed) return { status: "ok", value: { accepted: true } };
       const failure = session.failure ?? asCodexError(error);
       this.fail(session, failure);
       return errorResult(failure);
@@ -243,18 +258,27 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     const valid = this.validate(command.session);
     if (valid) return valid;
     const session = this.session!;
-    if (this.terminal(session) || !session.turnId || session.interruptRequested) {
+    const active = session.activeTurn;
+    if (this.terminal(session) || !active?.id || active.completed || session.interruptRequested) {
       return rejected("invalid_state", "Interrupt requires a live acknowledged turn and may only be sent once.");
     }
     session.interruptRequested = true;
     this.clearApprovals(session, "interrupted");
+    if (active.completed) return rejected("invalid_state", "The turn ended before an interrupt could be submitted.");
     try {
-      await session.rpc!.request("turn/interrupt", { threadId: session.identity.nativeSessionId, turnId: session.turnId });
-      if (session.failure) throw session.failure;
+      this.assertOpen(session);
+      active.interruptCall = session.rpc!.beginRequest("turn/interrupt", { threadId: session.identity.nativeSessionId, turnId: active.id });
+      await active.interruptCall.result;
+      if (active.interruptCall.completedFromNative && active.outcome !== "interrupted") {
+        return rejected("invalid_state", "The turn ended before Codex acknowledged the interrupt.");
+      }
+      if (session.failure && !active.completed) throw session.failure;
       // The RPC only acknowledges the request. turn/completed establishes the outcome.
       return { status: "ok", value: { accepted: true } };
     } catch (error) {
-      if (session.snapshot?.type === "session.cancelled" && !session.failure) return { status: "ok", value: { accepted: true } };
+      if (active.completed) return active.outcome === "interrupted"
+        ? { status: "ok", value: { accepted: true } }
+        : rejected("invalid_state", "The turn ended before Codex acknowledged the interrupt.");
       const failure = session.failure ?? asCodexError(error);
       this.fail(session, failure);
       return errorResult(failure);
@@ -328,20 +352,22 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     void this.cleanup(session);
   }
 
-  private publish(session: Session, payload: NativeHarnessEventPayload, correlationId = session.turnId): void {
+  private publish(session: Session, payload: NativeHarnessEventPayload, correlationId = session.turnId, after?: () => void): void {
     if (this.isDisposed(session)) return;
-    const event: NativeHarnessEvent = { ...payload, ...session.identity, correlationId, sequence: ++session.sequence, timestamp: this.options.now() };
-    session.eventQueue.push(structuredClone(event));
+    const event: NativeHarnessEvent = { nativeTurnId: session.turnId, ...payload, ...session.identity, correlationId, sequence: ++session.sequence, timestamp: this.options.now() };
+    session.eventQueue.push({ event: structuredClone(event), after });
     if (session.publishing) return;
     session.publishing = true;
     try {
       while (session.eventQueue.length && !this.isDisposed(session)) {
-        const next = session.eventQueue.shift()!;
+        const queued = session.eventQueue.shift()!;
+        const next = queued.event;
         if (next.type.startsWith("session.")) session.snapshot = structuredClone(next);
         for (const listener of [...session.listeners]) {
           if (this.isDisposed(session)) break;
           if (session.listeners.has(listener)) this.deliver(listener, next);
         }
+        if (!this.isDisposed(session)) queued.after?.();
       }
     } finally {
       session.publishing = false;
@@ -366,33 +392,46 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
 
   private message(session: Session, method: string, params: JsonObject, requestId?: RpcId): void {
     if (this.terminal(session)) return;
-    if (requestId !== undefined) { this.approval(session, method, params, requestId); return; }
+    if (requestId !== undefined) {
+      // A delayed old-turn request must never become a fresh UI prompt.
+      if (typeof params.turnId === "string" && session.completedTurns.has(params.turnId)) {
+        void session.rpc!.send({ id: requestId, error: { code: -32602, message: "The requested turn has ended." } }).catch(() => {});
+        return;
+      }
+      this.approval(session, method, params, requestId); return;
+    }
     // Do not subscribe to or import arbitrary sessions (including observed workers).
     if (params.threadId !== undefined && params.threadId !== session.identity.nativeSessionId) return;
     if (method.startsWith("account/")) return; // Native auth remains opaque to Ace.
     if (method === "thread/started") return; // Bind identity only from our response.
     if (!session.identity.nativeSessionId) return;
     if (params.turnId !== undefined) {
-      if (!session.turnRequested) throw new CodexError("incompatible_codex_protocol", "Codex emitted a turn before input was submitted.");
       const turnId = text(params.turnId, "turnId");
+      if (session.completedTurns.has(turnId)) return;
       if (session.turnId && session.turnId !== turnId) return;
-      session.turnId ??= turnId;
+      this.bindTurn(session, turnId);
+      if (this.terminal(session) || session.completedTurns.has(turnId)) return;
     }
     const details = { method, params };
     switch (method) {
       case "turn/started": {
         const turn = record(params.turn, "turn/started.turn");
-        if (!session.turnRequested || params.threadId !== session.identity.nativeSessionId) throw new CodexError("incompatible_codex_protocol", "Codex started an unsolicited turn.");
         const turnId = text(turn.id, "turn.id");
-        if (session.turnId && session.turnId !== turnId) throw new CodexError("incompatible_codex_protocol", "Codex started an unexpected turn.");
-        session.turnId = turnId;
+        if (session.completedTurns.has(turnId)) return;
+        if (params.threadId !== session.identity.nativeSessionId) throw new CodexError("incompatible_codex_protocol", "Codex omitted the thread ID.");
         if (turn.status !== "inProgress") throw new CodexError("incompatible_codex_protocol", "Unsupported started turn status.", details);
+        this.bindTurn(session, turnId);
+        if (this.terminal(session) || session.completedTurns.has(turnId)) return;
         this.state(session, this.runningState(session), "inProgress", details);
         return;
       }
       case "turn/completed": {
         const turn = record(params.turn, "turn/completed.turn");
-        if (!session.turnRequested || params.threadId !== session.identity.nativeSessionId || turn.id !== session.turnId) throw new CodexError("incompatible_codex_protocol", "Codex completed an unrecognized turn.");
+        const turnId = text(turn.id, "turn.id");
+        if (session.completedTurns.has(turnId)) return;
+        if (params.threadId !== session.identity.nativeSessionId) throw new CodexError("incompatible_codex_protocol", "Codex omitted the thread ID.");
+        this.bindTurn(session, turnId);
+        if (this.terminal(session) || session.completedTurns.has(turnId)) return;
         this.finishTurn(session, turn);
         return;
       }
@@ -435,7 +474,10 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
         const error = record(params.error, "error");
         if (typeof params.willRetry !== "boolean") throw new CodexError("incompatible_codex_protocol", "Codex did not report whether its error is terminal.", details);
         if (params.willRetry) this.state(session, this.runningState(session), "retrying", details);
-        else this.fail(session, nativeError(error));
+        else {
+          const failure = nativeError(error);
+          this.state(session, this.runningState(session), "turn_failed", { ...details, error: { code: failure.code, message: failure.message, nativeDetails: failure.details } });
+        }
         return;
       }
       default:
@@ -448,16 +490,46 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     if (!session.turnRequested || !session.turnId || params.threadId !== session.identity.nativeSessionId || params.turnId !== session.turnId) throw new CodexError("incompatible_codex_protocol", "Codex omitted the active thread/turn correlation.");
   }
 
+  private bindTurn(session: Session, turnId: string): void {
+    const active = session.activeTurn;
+    if (!active || active.completed || session.completedTurns.has(turnId) || (active.id && active.id !== turnId)) {
+      throw new CodexError("incompatible_codex_protocol", "Codex reported an unrecognized or reused turn ID.");
+    }
+    active.id = turnId;
+    session.turnId = turnId;
+    if (!active.started) {
+      active.started = true;
+      this.publish(session, { type: "turn.started", nativeTurnId: turnId });
+    }
+  }
+
   private finishTurn(session: Session, turn: JsonObject): void {
+    const active = session.activeTurn;
+    if (!active || active.completed || active.id !== turn.id) throw new CodexError("incompatible_codex_protocol", "Codex completed an unrecognized turn.");
     const status = text(turn.status, "turn.status");
-    if (status === "failed") { this.fail(session, nativeError(record(turn.error, "turn.error"))); return; }
-    if (status !== "completed" && status !== "interrupted") throw new CodexError("incompatible_codex_protocol", "Unsupported terminal Codex turn status.", { turn });
-    session.state = "terminal";
+    if (status !== "completed" && status !== "interrupted" && status !== "failed") throw new CodexError("incompatible_codex_protocol", "Unsupported terminal Codex turn status.", { turn });
+    const failure = status === "failed" ? nativeError(record(turn.error, "turn.error")) : undefined;
+    const nativeTurnId = text(active.id, "active turn ID");
+    active.completed = true;
+    active.outcome = status;
+    session.completedTurns.add(nativeTurnId);
+    // Native completion proves these commands' outcomes even before their RPC responses.
+    active.startCall?.completeFromNative({ turn });
+    active.interruptCall?.completeFromNative({});
     this.clearApprovals(session, "turn_ended");
-    this.publish(session, status === "completed"
-      ? { type: "session.completed", result: turn, nativeState: status, nativeDetails: { turn } }
-      : { type: "session.cancelled", reason: "Codex interrupted the turn.", nativeState: status, nativeDetails: { turn } });
-    void this.cleanup(session);
+    if (this.terminal(session)) return;
+    this.publish(session, {
+      type: "turn.completed", nativeTurnId, outcome: status, result: turn,
+      error: failure ? { code: failure.code, message: failure.message, retryable: false, nativeDetails: failure.details } : undefined,
+      nativeState: status, nativeDetails: { turn },
+    }, nativeTurnId, () => {
+      if (this.terminal(session) || session.activeTurn !== active) return;
+      session.activeTurn = undefined;
+      session.turnRequested = false;
+      session.turnId = undefined;
+      session.interruptRequested = false;
+      this.state(session, "ready", "idle", { completedTurnId: nativeTurnId }, nativeTurnId);
+    });
   }
 
   private approval(session: Session, method: string, params: JsonObject, requestId: RpcId): void {

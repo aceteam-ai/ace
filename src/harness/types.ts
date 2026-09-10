@@ -132,7 +132,30 @@ export type NativeHarnessSessionState =
   | "running"
   | "waiting_for_approval";
 
+export interface NativeHarnessTurnError {
+  code: string;
+  message: string;
+  retryable: boolean;
+  nativeDetails?: NativeDetails;
+}
+
+export type NativeHarnessTurnOutcome = "completed" | "interrupted" | "failed";
+
 export type NativeHarnessEventPayload =
+  | {
+      type: "turn.started";
+      nativeTurnId: string;
+      nativeDetails?: NativeDetails;
+    }
+  | {
+      type: "turn.completed";
+      nativeTurnId: string;
+      outcome: NativeHarnessTurnOutcome;
+      result?: unknown;
+      error?: NativeHarnessTurnError;
+      nativeState?: string;
+      nativeDetails?: NativeDetails;
+    }
   | {
       type: "session.state";
       state: NativeHarnessSessionState;
@@ -226,6 +249,8 @@ export type NativeHarnessEvent = NativeHarnessEventPayload & {
   adapterId: string;
   sessionId: string;
   nativeSessionId?: string;
+  /** Present when this event describes a known native turn; approvals keep request correlation. */
+  nativeTurnId?: string;
   correlationId?: string;
   sequence: number;
   timestamp: string;

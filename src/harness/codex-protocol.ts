@@ -104,6 +104,13 @@ export async function checkCodexVersion(
   }
 }
 
+export interface CodexRpcCall {
+  result: Promise<JsonObject>;
+  readonly completedFromNative: boolean;
+  /** Settle only when correlated native evidence establishes this request's outcome. */
+  completeFromNative(result: JsonObject): void;
+}
+
 interface PendingRpc {
   resolve: (value: JsonObject) => void;
   reject: (error: CodexError) => void;
@@ -113,8 +120,9 @@ interface PendingRpc {
 /** Private newline-delimited stdio transport; no sockets, shell, retries, or auth overrides. */
 export class CodexRpc {
   private readonly pending = new Map<RpcId, PendingRpc>();
+  private readonly retired = new Set<RpcId>();
   private readonly decoder = new StringDecoder("utf8");
-  private readonly writes = new Set<{ reject: (error: CodexError) => void; timer: ReturnType<typeof setTimeout> }>();
+  private readonly writes = new Set<{ reject: (error: CodexError) => void; resolve: () => void; clientRequestId?: RpcId; timer: ReturnType<typeof setTimeout> }>();
   private buffer = "";
   private nextId = 0;
   private ended = false;
@@ -142,20 +150,39 @@ export class CodexRpc {
   }
 
   request(method: string, params: JsonObject): Promise<JsonObject> {
-    if (this.ended) return Promise.reject(new CodexError("codex_disconnected", "Codex is disconnected."));
-    const id = `ace-${++this.nextId}`;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(new CodexError("codex_timeout", `Codex did not answer ${method}. The outcome is unknown; start a new session.`)), this.timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
-      void this.send({ id, method, params }).catch((error) => this.fail(asCodexError(error)));
-    });
+    return this.beginRequest(method, params).result;
   }
 
-  send(message: JsonObject): Promise<void> {
+  beginRequest(method: string, params: JsonObject): CodexRpcCall {
+    const id = `ace-${++this.nextId}`;
+    let completedFromNative = false;
+    const result = new Promise<JsonObject>((resolve, reject) => {
+      if (this.ended) { reject(new CodexError("codex_disconnected", "Codex is disconnected.")); return; }
+      const timer = setTimeout(() => this.fail(new CodexError("codex_timeout", `Codex did not answer ${method}. The outcome is unknown; start a new session.`)), this.timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      void this.send({ id, method, params }, id).catch((error) => this.fail(asCodexError(error)));
+    });
+    return {
+      result,
+      get completedFromNative() { return completedFromNative; },
+      completeFromNative: (value) => {
+        const pending = this.pending.get(id);
+        if (!pending) return;
+        completedFromNative = true;
+        this.settleRequestWrite(id);
+        clearTimeout(pending.timer);
+        this.pending.delete(id);
+        this.retired.add(id);
+        pending.resolve(value);
+      },
+    };
+  }
+
+  send(message: JsonObject, clientRequestId?: RpcId): Promise<void> {
     if (this.ended) return Promise.reject(new CodexError("codex_disconnected", "Codex is disconnected."));
     return new Promise((resolve, reject) => {
       const write = {
-        reject,
+        reject, resolve, clientRequestId,
         timer: setTimeout(() => this.fail(new CodexError("codex_timeout", "Codex write timed out. The outcome is unknown; start a new session.")), this.timeoutMs),
       };
       this.writes.add(write);
@@ -206,6 +233,17 @@ export class CodexRpc {
     this.writes.clear();
   }
 
+  private settleRequestWrite(id: RpcId): void {
+    // A correlated native response/outcome proves the request bytes reached Codex.
+    for (const write of this.writes) {
+      if (write.clientRequestId === id) {
+        clearTimeout(write.timer);
+        this.writes.delete(write);
+        write.resolve();
+      }
+    }
+  }
+
   private read(chunk: string): void {
     if (this.ended) return;
     this.buffer += chunk;
@@ -239,17 +277,21 @@ export class CodexRpc {
       return;
     }
     if (!rpcId(value.id) || ("result" in value) === ("error" in value)) throw new CodexError("codex_malformed_message", "Invalid Codex response.");
+    // A proven native turn outcome may precede this response. Never let it alter a later turn.
+    if (this.retired.has(value.id)) return;
     const pending = this.pending.get(value.id);
     if (!pending) throw new CodexError("codex_malformed_message", "Codex replied to an unknown request.");
     if ("error" in value) {
       if (!object(value.error) || typeof value.error.message !== "string" || typeof value.error.code !== "number") {
         throw new CodexError("codex_malformed_message", "Invalid Codex error response.");
       }
+      this.settleRequestWrite(value.id);
       clearTimeout(pending.timer);
       this.pending.delete(value.id);
       pending.reject(new CodexError(value.error.code === -32601 || value.error.code === -32602 ? "incompatible_codex_protocol" : "codex_request_failed", value.error.message, { rpcError: value.error }));
     } else {
       if (!object(value.result)) throw new CodexError("codex_malformed_message", "Invalid Codex result.");
+      this.settleRequestWrite(value.id);
       clearTimeout(pending.timer);
       this.pending.delete(value.id);
       pending.resolve(value.result);
