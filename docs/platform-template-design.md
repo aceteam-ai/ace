@@ -55,7 +55,7 @@ Bearer transport is supported. A separate OAuth implementation is unnecessary
 for this slice. Do not reuse or reinterpret Fabric credentials, endpoint
 configuration, or its retry wrapper.
 
-Proposed configuration is `~/.ace/platform/credentials.json`, an atomic complete
+Configuration is `~/.ace/platform/credentials.json`, an atomic complete
 pair of HTTPS origin and key. Use a private directory (0700), exclusive temporary
 file (0600), and atomic replacement. Reads must be bounded, regular-file only,
 owned/private, and reject symlinks/nonregular files before opening, with
@@ -78,7 +78,7 @@ allowed only for an explicit loopback test/development origin.
 
 ## Client and execution boundary
 
-Create `src/platform/{types,client,config}.ts` and focused tests. The client owns
+The implementation lives in `src/platform/` with focused tests. The client owns
 injected fetch, URL construction, bounds, response parsing, and transport errors:
 
 - `listTemplates({category?,signal?}): Promise<PlatformTemplateSummary[]>`
@@ -135,7 +135,7 @@ startup path or silently download platform graphs into the bundled registry.
 
 ## Verification and remaining scope
 
-Synthetic tests should cover actual list/detail/raw-run envelopes; null or stale
+Synthetic tests cover actual list/detail/raw-run envelopes; null or stale
 versions; inaccessible listed graph preventing every POST; pinned version path;
 separate origins/credentials and 307/308 refusal; login rejection without save;
 private atomic persistence and nonregular-file rejection; structured typed input;
