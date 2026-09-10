@@ -235,12 +235,16 @@ it("cleans the reserved provider/local identity when a native opening reports an
   vi.spyOn(native, "start").mockImplementation(async (command) => {
     const result = await original(command);
     if (result.status !== "ok") return result;
-    return { status: "ok", value: { ...result.value, adapterId: "unrelated", sessionId: "unrelated" } };
+    return { status: "ok", value: { ...result.value, adapterId: "unrelated", sessionId: "unrelated", nativeSessionId: "unrelated-native" } };
   });
-  const cleanup = vi.spyOn(native, "dispose");
+  const dispose = native.dispose.bind(native);
+  const cleanup = vi.spyOn(native, "dispose").mockImplementation((command) => {
+    if (command.session.nativeSessionId !== undefined) return Promise.resolve({ status: "rejected", code: "invalid_session", message: "Untrusted native ID" });
+    return dispose({ ...command, session: { ...command.session, nativeSessionId: "native-original" } });
+  });
   const adapter = manager.createAdapter("codex");
   expect(await adapter.start(start())).toMatchObject({ status: "error", code: "identity_mismatch" });
-  expect(cleanup).toHaveBeenCalledWith({ type: "session.dispose", session: { adapterId: "codex", sessionId: "original", nativeSessionId: "native-original" } });
+  expect(cleanup).toHaveBeenCalledWith({ type: "session.dispose", session: { adapterId: "codex", sessionId: "original" } });
   expect(await store.list()).toEqual([]);
 });
 
@@ -250,7 +254,9 @@ it("keeps failed-opening cleanup reachable when native disposal is unconfirmed",
     const result = await original(command);
     return result.status === "ok" ? { status: "ok", value: { ...result.value, sessionId: "unrelated" } } : result;
   });
-  const cleanup = vi.spyOn(native, "dispose").mockResolvedValueOnce({ status: "error", code: "synthetic_cleanup_failed", message: "Not confirmed" });
+  const dispose = native.dispose.bind(native);
+  const cleanup = vi.spyOn(native, "dispose").mockImplementation((command) => dispose({ ...command, session: { ...command.session, nativeSessionId: "native-original" } }))
+    .mockResolvedValueOnce({ status: "error", code: "synthetic_cleanup_failed", message: "Not confirmed" });
   const adapter = manager.createAdapter("codex");
   expect(await adapter.start(start())).toMatchObject({ status: "error", code: "native_cleanup_failed" });
   expect(await adapter.start(start("other"))).toMatchObject({ status: "rejected" });

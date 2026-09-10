@@ -141,9 +141,12 @@ class ManagedAdapter implements NativeHarnessAdapter {
       session.nativeGeneration++;
       session.nativeStarted = true;
       session.closing = undefined;
-      session.identity = { ...session.reserved, nativeSessionId: command.type === "session.resume" ? command.nativeSessionId : result.value.nativeSessionId };
-      if (result.value.adapterId !== this.adapterId || result.value.sessionId !== command.sessionId ||
-          (command.type === "session.resume" && result.value.nativeSessionId !== command.nativeSessionId)) {
+      const matches = result.value.adapterId === this.adapterId && result.value.sessionId === command.sessionId &&
+        (command.type !== "session.resume" || result.value.nativeSessionId === command.nativeSessionId);
+      session.identity = command.type === "session.resume"
+        ? { ...session.reserved, nativeSessionId: command.nativeSessionId }
+        : matches ? { ...session.reserved, nativeSessionId: result.value.nativeSessionId } : { ...session.reserved };
+      if (!matches) {
         throw new SessionStoreError("identity_mismatch", "The native adapter returned a different session identity.");
       }
       this.assertOpening(session);
