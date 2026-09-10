@@ -29,6 +29,8 @@ export interface NativeSessionState {
   changes: NativeChange[];
   approvals: NativeApproval[];
   notice?: string;
+  registrationNotice?: string;
+  connectionKind?: "new" | "resumed";
   interruptPending: boolean;
   lastSequence: number;
 }

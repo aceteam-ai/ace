@@ -1,6 +1,6 @@
 # Explicit managed native session resume
 
-The remaining integration for [#15](https://github.com/aceteam-ai/ace/issues/15)
+The integration for [#15](https://github.com/aceteam-ai/ace/issues/15)
 uses the #14 shared native panel and its existing adapter contract. The manager
 adds local registration and ownership; it does not reduce or persist view state.
 
@@ -84,5 +84,8 @@ Synthetic tests cover native resume protocol fields, missing/changed metadata,
 current auth/version, stale approvals, startup cancellation, clean and abrupt
 restart, corrupt state, active/unknown/dead ownership, late native success,
 concurrent disposal, failed cleanup, and no implicit turn submission. No real
-model or credentialed session is required by these tests. The shared terminal
-resume chooser and its PTY checks complete the user-facing #15 integration.
+model or credentialed session is required by these tests. The [shared terminal chooser](native-sessions.md) lists local candidates, requires
+explicit resume selection, displays registration notices, and provides confirmed
+forget/quarantine recovery with scrollable full paths and reasons. UI teardown
+also awaits local storage operations that the user already confirmed. Synthetic
+UI and two-process PTY checks verify the user-facing restart flow.

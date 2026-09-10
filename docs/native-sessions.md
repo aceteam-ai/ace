@@ -1,7 +1,7 @@
 # Native coding sessions in the terminal workspace
 
 Run `ace`, press Esc to open the home menu, and choose **Native coding session**.
-Select Codex, check or edit the workspace directory, then press Enter to start.
+Select Codex, check or edit the workspace directory, then press Enter. Choose **Start new session** or **Resume saved session**.
 The panel uses your installed Codex CLI and its own sign-in, model, configuration,
 and permissions. Browsing and native sessions require neither Python setup nor
 an AceTeam account. This integration currently validates exactly Codex CLI
@@ -48,12 +48,46 @@ previous one closes or fails. Ctrl+C exits the workspace and awaits owned native
 resource cleanup. The terminal restores its raw mode, cursor, and alternate screen
 on normal exit, interruption, and render errors.
 
+## Saved sessions and recovery
+
+A successfully opened native session is registered locally for later explicit
+resume. Open the workspace's saved-session list, select a registration, and press
+Enter. The list shows availability and reasons for unavailable records without
+starting Codex or inspecting native history. Native history, current sign-in,
+workspace identity, and the tested CLI version are checked on that explicit action.
+
+Resume uses a fresh local connection for the same recorded native thread. Earlier
+conversation is not loaded into the panel. Pending approvals and old commands are
+never restored or resent. An unavailable native session produces an error; it does
+not fall back to creating a new session. A stale owner left by an exited Ace process
+can be recovered only by this explicit resume action; active or unknown owners block it.
+
+In the saved list, `d` opens full details for the selected record, error, or recovery
+notice. Up/down and Page Up/Page Down scroll long paths and messages. `r` refreshes
+the list. `f` opens a separate confirmation to forget a local registration; press
+`y` to confirm or `n` to cancel. Forgetting a registration does not delete native
+history, and an active or unknown owner cannot be forgotten.
+
+Malformed or unsupported local state offers `c` for recovery. A separate `y`
+confirmation moves the original state into a private backup and starts an empty
+registration list. The full backup path is available in Details. Unsafe storage
+and stale shared locks require the specific manual recovery described in the
+error; they are not reset automatically. Native sessions that open successfully
+but cannot be registered stay usable with a visible registration notice and full
+details in Activity. Registration failure never repeats native work.
+
+The default registration directory is `~/.ace/sessions`. It contains bounded
+provider/local/native identity records, canonical workspace identity, timestamps,
+and local ownership files. Conversation, prompts, credentials, permission grants,
+and pending approvals are not stored. See [registration and recovery](native-session-store.md)
+and [native resume verification](native-session-resume.md) for exact boundaries.
+
 The session panel needs at least **40 columns × 24 rows**. Smaller terminals show
 a compact resize notice with pending-approval count; session actions are disabled
 until the panel is visible again. Esc and Ctrl+C remain available.
 
-This slice creates new sessions only. Restart/resume, arbitrary attach/import,
-external-message intake, and cross-provider state transfer are not exposed here.
+Arbitrary attach/import, external-message intake, and cross-provider state transfer
+are not exposed here. Only locally registered Ace-created sessions can be selected.
 See the [adapter](codex-adapter.md) and [reviewed turn lifecycle amendment](native-turn-lifecycle.md)
 for native protocol and authority boundaries.
 
@@ -84,3 +118,15 @@ fixture is not a production command or runtime test mode.
 80×24 and 48×12. The PTY check also verified an ordinary zero exit without forced
 termination, restored terminal flags/cursor/alternate screen, and no Python/runtime
 state creation. These checks do not establish live account or model access.
+
+
+The additional `tests/ui/fixtures/native-resume-entry.tsx` accepts three absolute
+paths inside an isolated test directory: workspace, registration directory, and
+trace file. It seeds synthetic native history independently of the registration
+store and can be launched twice against the same registration directory. Its
+trace records product start/resume/input/approval/dispose calls after fixture
+setup, so the restart check can verify no implicit native open or replay. All
+trace input must be synthetic; this fixture is not a production entry point.
+
+[Restart captures](native-resume-captures.md) show clean resume and explicit
+recovery after an intentionally killed process, with no command or approval replay.
