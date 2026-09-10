@@ -5,8 +5,8 @@ import { providerLabel } from "../utils/provider-detect.js";
 import { initialWorkspaceState, workspaceReducer, type WorkspaceScreen } from "./state.js";
 import { hasLocalProvider, taskService, type WorkspaceTaskService } from "./task-service.js";
 import { sanitizeTerminalText } from "./terminal.js";
-import { filterLocalTemplates, LocalTemplateDetail, LocalTemplateList } from "./components/LocalTemplates.js";
-import { MarkdownOutput } from "./components/MarkdownOutput.js";
+import { filterLocalTemplates, localTemplateDetailText, LocalTemplateDetail, LocalTemplateList } from "./components/LocalTemplates.js";
+import { boundedTailText, boundedTextLines, formatMarkdownOutput, MarkdownOutput } from "./components/MarkdownOutput.js";
 import { parseWorkflowInput, workflowFieldType } from "./workflow-form.js";
 
 export interface WorkspacePanel {
@@ -39,7 +39,8 @@ function visibleWindow<T>(items: T[], selected: number, rows: number): { items: 
 
 export function App({ service = taskService, panels = [], onExit, shutdownSignal }: AppProps): React.JSX.Element {
   const [state, dispatch] = useReducer(workspaceReducer, initialWorkspaceState);
-  const [columns, setColumns] = useState(useStdout().stdout.columns ?? 80);
+  const stdout = useStdout().stdout;
+  const [terminalSize, setTerminalSize] = useState({ columns: stdout.columns ?? 80, rows: stdout.rows ?? 24 });
   const controller = useRef<AbortController>();
   const pending = useRef<Promise<void>>();
   const exiting = useRef(false);
@@ -62,12 +63,31 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
     return () => { mounted = false; controller.current?.abort(); };
   }, [service]);
 
-  const stdout = useStdout().stdout;
   useEffect(() => {
-    const resize = () => setColumns(stdout.columns ?? 80);
+    const resize = () => setTerminalSize({ columns: stdout.columns ?? 80, rows: stdout.rows ?? 24 });
     stdout.on("resize", resize);
     return () => { stdout.removeListener("resize", resize); };
   }, [stdout]);
+
+  const { columns, rows: terminalRows } = terminalSize;
+  const contentWidth = Math.max(1, columns - (columns > 40 ? 4 : 0));
+  const resultText = sanitizeTerminalText(state.error ?? state.result?.output ?? "");
+  const resultLines = useMemo(() => formatMarkdownOutput(resultText, contentWidth), [resultText, contentWidth]);
+  const resultInputLines = state.result?.input
+    ? boundedTextLines(state.result.input, contentWidth, terminalRows <= 14 ? 1 : 2)
+    : [];
+  const resultReservedRows = 7 + (state.result?.sample ? 1 : 0) + (resultInputLines.length ? 1 + resultInputLines.length : 0);
+  const resultAvailableRows = Math.max(1, terminalRows - resultReservedRows);
+  const resultNeedsIndicator = resultLines.length > resultAvailableRows && resultAvailableRows > 1;
+  const resultPage = resultNeedsIndicator ? resultAvailableRows - 1 : resultAvailableRows;
+  const resultOffset = Math.min(state.selected, Math.max(0, resultLines.length - resultPage));
+  const activeTemplate = templates.find((item) => item.id === state.selectedId);
+  const templateDetailPage = Math.max(1, terminalRows - 5);
+  const templateDetailLines = useMemo(
+    () => activeTemplate ? formatMarkdownOutput(localTemplateDetailText(activeTemplate), contentWidth) : [],
+    [activeTemplate, contentWidth]
+  );
+  const templateDetailOffset = Math.min(state.selected, Math.max(0, templateDetailLines.length - templateDetailPage));
 
   const finishExit = async () => {
     if (exiting.current) return;
@@ -156,7 +176,12 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
       return;
     }
     if (state.screen === "template-detail") {
-      if (key.escape || input === "h") dispatch({ type: "back" });
+      const lastOffset = Math.max(0, templateDetailLines.length - templateDetailPage);
+      if (key.upArrow || input === "k") dispatch({ type: "select", index: Math.max(0, templateDetailOffset - 1) });
+      else if (key.downArrow || input === "j") dispatch({ type: "select", index: Math.min(lastOffset, templateDetailOffset + 1) });
+      else if (key.pageUp) dispatch({ type: "select", index: Math.max(0, templateDetailOffset - templateDetailPage) });
+      else if (key.pageDown) dispatch({ type: "select", index: Math.min(lastOffset, templateDetailOffset + templateDetailPage) });
+      else if (key.escape || input === "h") dispatch({ type: "back" });
       else if (key.return) dispatch({ type: "navigate", screen: "template-output", returnTo: "template-detail", selectedId: state.selectedId, input: "workflow.json" });
       return;
     }
@@ -195,7 +220,7 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
           try { dispatch({ type: "result", title: "Workflow created", output: service.createWorkflow(state.selectedId!, value) }); }
           catch (error) { dispatch({ type: "error", message: error instanceof Error ? error.message : String(error) }); }
         }
-      } else if (!key.ctrl && !key.meta && input) dispatch({ type: "input", value: state.input + input });
+      } else if (!key.ctrl && !key.meta && input) dispatch({ type: "append-input", value: input });
       return;
     }
     if (state.screen === "settings" && input === "e") {
@@ -203,10 +228,8 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
       return;
     }
     if (state.screen === "result") {
-      const lines = (state.result?.output ?? state.error ?? "").split("\n");
-      const page = Math.max(3, (stdout.rows ?? 24) - 12);
-      if (key.upArrow || input === "k") dispatch({ type: "select", index: Math.max(0, state.selected - 1) });
-      else if (key.downArrow || input === "j") dispatch({ type: "select", index: Math.min(Math.max(0, lines.length - page), state.selected + 1) });
+      if (key.upArrow || input === "k") dispatch({ type: "select", index: Math.max(0, resultOffset - 1) });
+      else if (key.downArrow || input === "j") dispatch({ type: "select", index: Math.min(Math.max(0, resultLines.length - resultPage), resultOffset + 1) });
       else if (key.escape || key.return || input === "q") goHome();
       return;
     }
@@ -235,29 +258,35 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
     });
   }
 
+  function inputLine(): ReactNode {
+    const preview = boundedTailText(state.input, Math.max(1, contentWidth - 3));
+    return <Box width={contentWidth}><Text color="cyan">{"› " + preview + "▌"}</Text></Box>;
+  }
+
   function renderBody(): ReactNode {
     if (state.screen === "help") return <Box flexDirection="column"><Text bold>Keys</Text><Text>↑/↓ or j/k  Move</Text><Text>Enter       Select or submit</Text><Text>Esc or h    Back</Text><Text>?           Toggle this help</Text><Text>q           Quit or cancel</Text></Box>;
     if (state.screen === "home") return <Box flexDirection="column"><Text bold>What would you like to do?</Text>{list(homeItems, state.selected)}</Box>;
     if (state.screen === "tasks") return <Box flexDirection="column"><Text bold>Choose a task</Text>{!state.providerReady && <Text color="yellow">Provider check still running; you can browse now.</Text>}{list(patterns, state.selected)}</Box>;
-    if (state.screen === "templates") return <LocalTemplateList templates={filteredTemplates} selected={state.selected} query={state.templateQuery} />;
+    if (state.screen === "templates") return <LocalTemplateList templates={filteredTemplates} selected={state.selected} query={state.templateQuery} width={contentWidth} maxRows={Math.max(3, terminalRows - 5)} />;
     if (state.screen === "template-detail") {
-      const template = templates.find((item) => item.id === state.selectedId);
-      return template ? <LocalTemplateDetail template={template} /> : <Text color="red">Template unavailable</Text>;
+      return activeTemplate
+        ? <LocalTemplateDetail template={activeTemplate} width={contentWidth} maxRows={templateDetailPage} offset={templateDetailOffset} physical={templateDetailLines} />
+        : <Text color="red">Template unavailable</Text>;
     }
-    if (state.screen === "task-input") return <Box flexDirection="column"><Text bold>Enter text</Text><Text color="cyan">› {sanitizeTerminalText(state.input)}<Text inverse> </Text></Text></Box>;
+    if (state.screen === "task-input") return <Box flexDirection="column"><Text bold>Enter text</Text>{inputLine()}</Box>;
     if (state.screen === "workflow-values") {
       const field = state.workflowFields?.[state.selected];
       return <Box flexDirection="column">
-        <Text bold>{sanitizeTerminalText(field?.schema.title || field?.name || "Input")}</Text>
-        {field?.schema.description && <Text dimColor>{sanitizeTerminalText(field.schema.description)}</Text>}
-        <Text dimColor>{field ? workflowFieldType(field) : "value"}{field?.required ? " · required" : " · optional"}{field && "default" in field.schema ? ` · Enter uses ${sanitizeTerminalText(JSON.stringify(field.schema.default))}` : ""}</Text>
-        <Text color="cyan">› {sanitizeTerminalText(state.input)}<Text inverse> </Text></Text>
-        {state.formError && <Text color="red">{sanitizeTerminalText(state.formError)}</Text>}
+        <Text bold wrap="truncate-end">{sanitizeTerminalText(field?.schema.title || field?.name || "Input")}</Text>
+        {field?.schema.description && <Text dimColor wrap="truncate-end">{sanitizeTerminalText(field.schema.description)}</Text>}
+        <Text dimColor wrap="truncate-end">{field ? sanitizeTerminalText(workflowFieldType(field)) : "value"}{field?.required ? " · required" : " · default available"}{field && "default" in field.schema ? ` · Enter uses ${sanitizeTerminalText(JSON.stringify(field.schema.default))}` : ""}{Array.isArray(field?.schema.enum) && field.schema.enum.includes("") ? ' · type "" for empty' : ""}</Text>
+        {inputLine()}
+        {state.formError && <Text color="red" wrap="truncate-end">{sanitizeTerminalText(state.formError)}</Text>}
       </Box>;
     }
-    if (state.screen === "workflow") return <Box flexDirection="column"><Text bold>Workflow JSON path</Text><Text color="cyan">› {sanitizeTerminalText(state.input)}<Text inverse> </Text></Text></Box>;
-    if (state.screen === "settings-edit") return <Box flexDirection="column"><Text bold>Default model</Text><Text color="cyan">› {sanitizeTerminalText(state.input)}<Text inverse> </Text></Text></Box>;
-    if (state.screen === "template-output") return <Box flexDirection="column"><Text bold>Output path</Text><Text color="cyan">› {sanitizeTerminalText(state.input)}<Text inverse> </Text></Text><Text dimColor>Existing files are left untouched.</Text></Box>;
+    if (state.screen === "workflow") return <Box flexDirection="column"><Text bold>Workflow JSON path</Text>{inputLine()}</Box>;
+    if (state.screen === "settings-edit") return <Box flexDirection="column"><Text bold>Default model</Text>{inputLine()}</Box>;
+    if (state.screen === "template-output") return <Box flexDirection="column"><Text bold>Output path</Text>{inputLine()}<Text dimColor>Existing files are left untouched.</Text></Box>;
     if (state.screen === "running") return <Box flexDirection="column"><Text bold color="cyan">Working…</Text>{state.progress.map((item, index) => <Text key={index}>{index === state.progress.length - 1 ? "●" : "✓"} {sanitizeTerminalText(item.message)}</Text>)}</Box>;
     if (state.screen === "settings") {
       const config = service.getConfig();
@@ -268,16 +297,20 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
       const panel = panels.find((item) => `panel:${item.id}` === state.screen);
       return panel?.render({ back: goHome, sanitize: sanitizeTerminalText }) ?? <Text>Panel unavailable</Text>;
     }
-    const resultText = sanitizeTerminalText(state.error ?? state.result?.output ?? "");
-    const page = Math.max(3, (stdout.rows ?? 24) - 12);
-    const shown = resultText.split("\n").slice(state.selected, state.selected + page).join("\n");
-    return <Box flexDirection="column"><Text bold color={state.error ? "red" : "green"}>{sanitizeTerminalText(state.error ? "Could not complete" : state.result?.title ?? "Result")}</Text>{state.result?.sample && <Text color="yellow">Prerecorded sample — no model was called.</Text>}{state.result?.input && <><Text bold>{state.result.sample ? "Sample input" : "Input"}</Text><Text>{sanitizeTerminalText(state.result.input)}</Text></>}<Text bold>{state.error ? "Error" : "Output"}</Text><MarkdownOutput value={shown} />{resultText.split("\n").length > page && <Text dimColor>↑/↓ Scroll</Text>}</Box>;
+    return <Box flexDirection="column">
+      <Text bold color={state.error ? "red" : "green"}>{sanitizeTerminalText(state.error ? "Could not complete" : state.result?.title ?? "Result")}</Text>
+      {state.result?.sample && <Text color="yellow">Prerecorded sample — no model was called.</Text>}
+      {resultInputLines.length > 0 && <><Text bold>{state.result?.sample ? "Sample input" : "Input"}</Text>{resultInputLines.map((line, index) => <Text key={index}>{line}</Text>)}</>}
+      <Text bold>{state.error ? "Error" : "Output"}</Text>
+      <MarkdownOutput physical={resultLines} offset={resultOffset} maxLines={resultPage} />
+      {resultNeedsIndicator && <Text dimColor>↑/↓ Scroll</Text>}
+    </Box>;
   }
 
   function footer(): string {
     if (state.screen === "running") return "Esc Cancel";
-    if (state.screen === "templates") return "Type Filter  ↑↓ Move  Enter Details  Esc Back  Tab Keys";
-    if (state.screen === "template-detail") return "Enter Create  Esc Back  ? Keys";
+    if (state.screen === "templates") return "Type Filter  ↑↓ Move  Enter Open  Esc Back";
+    if (state.screen === "template-detail") return "↑↓ Scroll PgUp/Dn Enter Create Esc Back";
     if (state.screen === "tasks") return "↑↓ Move  Enter Select  Esc Menu  q Exit  ? Keys";
     if (state.screen === "home") return "↑↓ Move  Enter Select  q Exit  ? Keys";
     if (state.screen === "task-input" || state.screen === "workflow" || state.screen === "workflow-values" || state.screen === "template-output" || state.screen === "settings-edit") return "Enter Submit  Esc Back  Tab Keys";
