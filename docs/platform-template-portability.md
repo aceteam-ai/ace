@@ -1,5 +1,9 @@
 # Seed parity and local portability evidence
 
+Ace now runs the published v2 RC pair: `aceteam-workflow-engine==2.0.0rc16` and `aceteam-nodes[llm]==0.8.0`. The current graph contract is exposed by `aceteam://flows/graph-template` and `aceteam://flows/schema-overview` on the AceTeam MCP, with the workflow-engine library as the type and execution source. All 11 task graphs and 4 examples passed the engine validator. The bundled `hello-llm` graph executed with a synthetic context; `api-to-llm` fetched a loopback HTTP fixture and returned a synthetic summary. No provider credentials or live model calls were used. These checks prove current local compatibility, not parity with an org-specific database seed set.
+
+The checks below record the earlier rc8/0.5.1 baseline before migration.
+
 The canonical database template seed set remains unidentified, so exact bundled
 parity is unproven. This does not establish that the deployed seed set is empty.
 Form schemas and static UI examples are separate from database workflow templates
