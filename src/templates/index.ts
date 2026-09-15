@@ -38,8 +38,7 @@ export const TEMPLATES: TemplateMetadata[] = [
   defineTemplate("hello-llm", "basics", helloLlm),
   defineTemplate("text-transform", "basics", textTransform),
   defineTemplate("llm-chain", "chains", llmChain),
-  defineTemplate("api-to-llm", "chains", apiToLlm,
-    "Authoring example only with aceteam-nodes 0.5.1: its APICall node is incompatible with the runner. Use a compatible APICall runtime before executing this workflow."),
+  defineTemplate("api-to-llm", "chains", apiToLlm),
 ];
 
 export function getTemplateById(id: string): TemplateMetadata | undefined {

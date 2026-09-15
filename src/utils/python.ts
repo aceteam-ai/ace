@@ -6,10 +6,11 @@ import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import which from "which";
 import { loadConfig } from "./config.js";
+import { WORKFLOW_PYTHON_RUNNER } from "./workflow-python-runner.js";
 
 export const UV_VERSION = "0.12.12";
-export const ACETEAM_NODES_SPEC = "aceteam-nodes[llm]==0.5.1";
-export const WORKFLOW_ENGINE_SPEC = "aceteam-workflow-engine==2.0.0rc8";
+export const ACETEAM_NODES_SPEC = "aceteam-nodes[llm]==0.8.0";
+export const WORKFLOW_ENGINE_SPEC = "aceteam-workflow-engine==2.0.0rc16";
 const UV_INSTALLER_SHA256 = {
   win32: "00b69ae502ad6a6c5af9d606559a29f218374f086cafa89bc2f6408a1f3e24b5",
   default: "f4f45f7f5f213d96efc1978b8772b2c037d495d9161ffa7468f8167c6b031033",
@@ -159,15 +160,16 @@ export function isVenvValid(venvDir: string): boolean { return existsSync(getVen
 
 export function isAceteamNodesInstalled(pythonPath: string): boolean {
   try {
-    execFileSync(pythonPath, ["-m", "aceteam_nodes.cli", "list-nodes"], { stdio: "pipe", timeout: 15_000 });
+    execFileSync(pythonPath, ["-c", WORKFLOW_PYTHON_RUNNER, "probe"], { stdio: "pipe", timeout: 15_000 });
     return true;
   } catch { return false; }
 }
 
 export async function isAceteamNodesReady(pythonPath: string, signal?: AbortSignal): Promise<boolean> {
   try {
-    const result = await runProcess(pythonPath, ["-m", "aceteam_nodes.cli", "list-nodes"], { signal });
-    return result.code === 0 && result.stdout.trim().length > 0;
+    const result = await runProcess(pythonPath, ["-c", WORKFLOW_PYTHON_RUNNER, "probe"], { signal });
+    if (result.code !== 0) return false;
+    return (JSON.parse(result.stdout) as { ready?: boolean }).ready === true;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") throw error;
     return false;
@@ -241,6 +243,7 @@ export function parseProgressLine(line: string): ProgressEvent | null {
 export interface RunOptions {
   verbose?: boolean;
   config?: string;
+  baseDir?: string;
   signal?: AbortSignal;
   onProgress?: (event: ProgressEvent) => void;
 }
@@ -260,8 +263,7 @@ export async function runWorkflow(
   input: Record<string, unknown>,
   options: RunOptions = {}
 ): Promise<RunResult> {
-  const args = ["-m", "aceteam_nodes.cli", "run", filePath, "--input", JSON.stringify(input), "--verbose"];
-  if (options.config) args.push("--config", options.config);
+  const args = ["-c", WORKFLOW_PYTHON_RUNNER, "run", filePath, JSON.stringify(input), options.config ?? "", options.baseDir ?? join(homedir(), ".ace", "runs")];
   let completedNodes = 0;
   let totalNodes = 0;
   let pending = "";
@@ -302,8 +304,8 @@ async function simplePythonCommand(pythonPath: string, args: string[]): Promise<
   catch { return { error: result.stderr.trim() || "Failed to parse Python output" }; }
 }
 export function validateWorkflow(pythonPath: string, filePath: string): Promise<Record<string, unknown>> {
-  return simplePythonCommand(pythonPath, ["-m", "aceteam_nodes.cli", "validate", filePath]);
+  return simplePythonCommand(pythonPath, ["-c", WORKFLOW_PYTHON_RUNNER, "validate", filePath]);
 }
 export function listNodes(pythonPath: string): Promise<Record<string, unknown>> {
-  return simplePythonCommand(pythonPath, ["-m", "aceteam_nodes.cli", "list-nodes"]);
+  return simplePythonCommand(pythonPath, ["-c", WORKFLOW_PYTHON_RUNNER, "nodes"]);
 }
