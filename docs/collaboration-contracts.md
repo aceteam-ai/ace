@@ -2,6 +2,8 @@
 
 Status: design proposal for review. No subscriber, native external-intake operation, or inbox is implemented by this document. The public issues require a reviewed provider contract before implementation. A fake endpoint or generic SSE client cannot establish a supported provider protocol. Initial local-session work remains useful without these integrations. [#18](https://github.com/aceteam-ai/ace/issues/18), [#19](https://github.com/aceteam-ai/ace/issues/19), [#20](https://github.com/aceteam-ai/ace/issues/20).
 
+The authoritative delivery contract belongs to [aceteam-ai/aceteam#8887](https://github.com/aceteam-ai/aceteam/issues/8887). Ace consumes its accepted public interface alongside other clients; this document records Ace's requirements and must not define a separate transport. The provider's design discussion does not yet supply the complete accepted URL, authentication, envelope, cursor, and ACK wire contract needed to implement #18–20.
+
 ### S6 / #18: provider delivery contract checklist
 
 An accepted public artifact needs a version identifier and synthetic wire examples for all of:
