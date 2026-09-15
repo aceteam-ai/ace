@@ -6,6 +6,8 @@ The authoritative delivery contract belongs to [aceteam-ai/aceteam#8887](https:/
 
 That design is a contract for server behavior, not yet a supported Ace client wire interface. Its remaining implementation slices include the renderer, cursor accessors, drain, session follow/pending tools, and a later web drain signal. The current shipped session registry and chat-author tools do not supply a subscribed event URL, consumer auth/binding, versioned event bytes, replay/expiry response, or callable ACK with documented failure behavior. The separate supervised-session observe feed is for a different session-control feature and cannot be treated as a chat handoff subscription. The planned next-tool-call session middleware would avoid model inbox polling while a harness is already calling AceTeam tools; it does not by itself provide idle native intake or the event subscriber required by #18–20. Build the client only after the provider publishes and implements a callable surface, or revises those issues around the supported MCP-call delivery path.
 
+Provider follow-ups: [#9868](https://github.com/aceteam-ai/aceteam/issues/9868) owns the versioned, discoverable Ace-facing MCP/event contract and conformance fixtures; [#9869](https://github.com/aceteam-ai/aceteam/issues/9869) owns the MCP ACK, status reconciliation and send-idempotency commands needed by that contract. Both extend the existing #9384, #9417 and #9514 work rather than replacing it.
+
 ### S6 / #18: provider delivery contract checklist
 
 An accepted public artifact needs a version identifier and synthetic wire examples for all of:
