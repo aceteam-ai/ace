@@ -4,7 +4,7 @@ import type { WorkflowInputField } from "./workflow-form.js";
 
 export type WorkspaceScreen =
   | "home" | "tasks" | "task-input" | "workflow" | "workflow-values" | "templates" | "template-detail"
-  | "template-output" | "settings" | "settings-edit" | "provider" | "running" | "result" | "help"
+  | "template-output" | "chat" | "work" | "harness-config" | "settings" | "settings-edit" | "provider" | "running" | "result" | "help"
   | `panel:${string}`;
 
 export interface WorkspaceProgress {

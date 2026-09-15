@@ -1,5 +1,10 @@
 import React, { useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getTemplateById } from "../templates/index.js";
+import { findOnPath, loadHarnesses, saveHarnessArgs, type HarnessManifest, type LauncherAction } from "../launcher.js";
 import pkg from "../../package.json" with { type: "json" };
 import { providerLabel } from "../utils/provider-detect.js";
 import { initialWorkspaceState, workspaceReducer, type WorkspaceScreen } from "./state.js";
@@ -22,6 +27,8 @@ export interface AppProps {
   panels?: WorkspacePanel[];
   onExit?: () => void;
   shutdownSignal?: AbortSignal;
+  launcher?: boolean;
+  onExternalAction?: (action: LauncherAction) => void;
 }
 
 interface MenuItem { id: string; label: string; description: string; screen?: WorkspaceScreen }
@@ -39,8 +46,12 @@ function visibleWindow<T>(items: T[], selected: number, rows: number): { items: 
   return { items: items.slice(offset, offset + rows), offset };
 }
 
-export function App({ service = taskService, panels = [], onExit, shutdownSignal }: AppProps): React.JSX.Element {
-  const [state, dispatch] = useReducer(workspaceReducer, initialWorkspaceState);
+export function App({ service = taskService, panels = [], onExit, shutdownSignal, launcher = false, onExternalAction }: AppProps): React.JSX.Element {
+  const [state, dispatch] = useReducer(workspaceReducer, { ...initialWorkspaceState, screen: launcher ? "home" : "tasks" });
+  const [harnesses, setHarnesses] = useState<HarnessManifest[]>(() => launcher ? loadHarnesses() : []);
+  const [chatHistory, setChatHistory] = useState<Array<{ role: "You" | "Ace"; text: string }>>([]);
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatError, setChatError] = useState<string>();
   const stdout = useStdout().stdout;
   const [terminalSize, setTerminalSize] = useState({ columns: stdout.columns ?? 80, rows: stdout.rows ?? 24 });
   const controller = useRef<AbortController>();
@@ -51,9 +62,20 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
   const templates = useMemo(() => service.listTemplates(), [service]);
   const filteredTemplates = useMemo(() => filterLocalTemplates(templates, state.templateQuery), [templates, state.templateQuery]);
   const homeItems = useMemo<MenuItem[]>(() => [
-    ...BASE_ACTIONS,
-    ...panels.map((panel) => ({ id: panel.id, label: panel.title, description: panel.description, screen: `panel:${panel.id}` as WorkspaceScreen })),
+    ...(launcher ? [
+      { id: "chat", label: "Chat", description: "Talk through the local workflow", screen: "chat" as WorkspaceScreen },
+      { id: "code", label: "Code", description: "Open a native coding session", screen: "panel:native" as WorkspaceScreen },
+      { id: "work", label: "Work", description: "Run a task or workflow", screen: "work" as WorkspaceScreen },
+      ...harnesses.map((entry) => ({ id: `harness:${entry.id}`, label: `Launch ${entry.name}${findOnPath(entry.detect) ? "" : entry.install ? " (install)" : " (install recipe needed)"}`, description: entry.description })),
+      { id: "settings", label: "Settings", description: "Model and connection", screen: "settings" as WorkspaceScreen },
+      { id: "provider", label: "Provider", description: "Connect an LLM provider", screen: "provider" as WorkspaceScreen },
+    ] : BASE_ACTIONS),
+    ...(launcher ? [] : panels).map((panel) => ({ id: panel.id, label: panel.title, description: panel.description, screen: `panel:${panel.id}` as WorkspaceScreen })),
     { id: "exit", label: "Exit", description: "Return to your terminal" },
+  ], [panels, launcher, harnesses]);
+  const workItems = useMemo<MenuItem[]>(() => [
+    ...BASE_ACTIONS.slice(0, 3),
+    ...panels.filter((panel) => panel.id === "platform-templates").map((panel) => ({ id: panel.id, label: panel.title, description: panel.description, screen: `panel:${panel.id}` as WorkspaceScreen })),
   ], [panels]);
 
   useEffect(() => {
@@ -91,12 +113,13 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
   );
   const templateDetailOffset = Math.min(state.selected, Math.max(0, templateDetailLines.length - templateDetailPage));
 
-  const finishExit = async () => {
+  const finishExit = async (action?: LauncherAction) => {
     if (exiting.current) return;
     exiting.current = true;
     controller.current?.abort();
     try { await pending.current; } catch { /* the run reports its own failure */ }
     await Promise.allSettled(panels.map((panel) => Promise.resolve().then(() => panel.dispose?.())));
+    if (action) onExternalAction?.(action);
     onExit?.();
     exit();
   };
@@ -128,6 +151,42 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
     );
   };
 
+  const startChat = (message: string) => {
+    if (!hasLocalProvider(state.provider)) { setChatError("Chat needs a local LLM provider. Open Provider for setup."); return; }
+    const current = new AbortController();
+    controller.current = current;
+    const history = [...chatHistory, { role: "You" as const, text: message }];
+    setChatHistory(history);
+    setChatError(undefined);
+    setChatBusy(true);
+    dispatch({ type: "input", value: "" });
+    const work = (async () => {
+      const directory = mkdtempSync(join(tmpdir(), "ace-chat-"));
+      try {
+        const template = getTemplateById("hello-llm");
+        if (!template) throw new Error("Chat workflow unavailable");
+        const path = join(directory, "chat.json");
+        const workflow = structuredClone(template.workflow);
+        const node = workflow.inner_nodes.find((item) => item.type === "LLM");
+        if (node && state.provider?.model) node.params.model = state.provider.model;
+        writeFileSync(path, JSON.stringify(workflow));
+        const prompt = history.map((turn) => `${turn.role}: ${turn.text}`).join("\n") + "\nAce:";
+        const raw = await service.executeWorkflow(path, { prompt }, { signal: current.signal, onProgress: () => {} });
+        let answer = raw;
+        try { const result = JSON.parse(raw) as Record<string, unknown>; answer = typeof result.response === "string" ? result.response : raw; } catch { /* display plain text */ }
+        setChatHistory((turns) => [...turns, { role: "Ace", text: answer }]);
+      } catch (error) {
+        setChatError(current.signal.aborted ? "Chat cancelled" : error instanceof Error ? error.message : String(error));
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+        if (controller.current === current) controller.current = undefined;
+        setChatBusy(false);
+      }
+    })();
+    pending.current = work;
+    void work.finally(() => { if (pending.current === work) pending.current = undefined; });
+  };
+
   const menuKeys = (length: number, choose: (index: number) => void, back = goHome) => (input: string, key: Parameters<Parameters<typeof useInput>[0]>[1]) => {
     if (key.upArrow || input === "k") dispatch({ type: "select", index: (state.selected - 1 + length) % length });
     else if (key.downArrow || input === "j") dispatch({ type: "select", index: (state.selected + 1) % length });
@@ -138,18 +197,58 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
   useInput((input, key) => {
     if (key.ctrl && input === "c") { if (state.screen === "running") controller.current?.abort(); else void finishExit(); return; }
     if (state.screen.startsWith("panel:")) return; // Active panels own text input, help, focus, and back keys.
-    const textScreen = state.screen === "templates" || state.screen === "task-input" || state.screen === "workflow" || state.screen === "workflow-values" || state.screen === "template-output" || state.screen === "settings-edit";
+    const textScreen = state.screen === "chat" || state.screen === "harness-config" || state.screen === "templates" || state.screen === "task-input" || state.screen === "workflow" || state.screen === "workflow-values" || state.screen === "template-output" || state.screen === "settings-edit";
     if (((input === "?" && !textScreen) || key.tab) && state.screen !== "running") {
       dispatch({ type: "help" });
       return;
     }
     if (state.screen === "help") { if (key.escape || key.return || input === "q") dispatch({ type: "help" }); return; }
+    if (state.screen === "chat") {
+      if (key.escape) { if (chatBusy) controller.current?.abort(); else goHome(); return; }
+      if (chatBusy) return;
+      if (key.backspace || key.delete) dispatch({ type: "input", value: state.input.slice(0, -1) });
+      else if (key.return && state.input.trim()) startChat(state.input.trim());
+      else if (!key.ctrl && !key.meta && input) dispatch({ type: "append-input", value: input });
+      return;
+    }
+    if (state.screen === "work") {
+      menuKeys(workItems.length, (index) => dispatch({ type: "navigate", screen: workItems[index].screen!, returnTo: "work" }))(input, key);
+      return;
+    }
+    if (state.screen === "harness-config") {
+      if (key.escape) { dispatch({ type: "back" }); return; }
+      if (key.backspace || key.delete) dispatch({ type: "input", value: state.input.slice(0, -1) });
+      else if (key.return) {
+        try {
+          const entry = harnesses.find((item) => item.id === state.selectedId);
+          if (!entry) throw new Error("Harness unavailable");
+          const args = JSON.parse(state.input) as unknown;
+          if (!Array.isArray(args)) throw new Error("Enter a JSON array of CLI arguments");
+          saveHarnessArgs(entry, args);
+          setHarnesses(loadHarnesses());
+          dispatch({ type: "navigate", screen: state.returnTo, returnTo: "home" });
+        } catch (error) { dispatch({ type: "form-error", message: error instanceof Error ? error.message : String(error) }); }
+      } else if (!key.ctrl && !key.meta && input) dispatch({ type: "append-input", value: input });
+      return;
+    }
     if (state.screen === "running") { if (key.escape || input === "q") controller.current?.abort(); return; }
     if (state.screen === "home") {
+      if (key.rightArrow && homeItems[state.selected]?.id.startsWith("harness:")) {
+        const id = homeItems[state.selected].id.slice("harness:".length);
+        const entry = harnesses.find((item) => item.id === id);
+        if (entry) dispatch({ type: "navigate", screen: "harness-config", returnTo: "home", selectedId: id, input: JSON.stringify(entry.launch.args) });
+        return;
+      }
       menuKeys(homeItems.length, (index) => {
         const item = homeItems[index];
         if (item.id === "exit") void finishExit();
-        else dispatch({ type: "navigate", screen: item.screen!, returnTo: "home" });
+        else if (item.id.startsWith("harness:")) {
+          const entry = harnesses.find((candidate) => candidate.id === item.id.slice("harness:".length));
+          if (!entry) return;
+          const kind = findOnPath(entry.detect) ? "launch" : "install";
+          if (kind === "install" && !entry.install) dispatch({ type: "error", message: `Add an install command for ${entry.name} in the launcher registry.` });
+          else void finishExit({ kind, harness: entry });
+        } else dispatch({ type: "navigate", screen: item.screen!, returnTo: "home" });
       }, () => { void finishExit(); })(input, key);
       if (input === "q") void finishExit();
       return;
@@ -270,7 +369,17 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
 
   function renderBody(): ReactNode {
     if (state.screen === "help") return <Box flexDirection="column"><Text bold>Keys</Text><Text>↑/↓ or j/k  Move</Text><Text>Enter       Select or submit</Text><Text>Esc or h    Back</Text><Text>?           Toggle this help</Text><Text>q           Quit or cancel</Text></Box>;
-    if (state.screen === "home") return <Box flexDirection="column"><Text bold>What would you like to do?</Text>{list(homeItems, state.selected)}</Box>;
+    if (state.screen === "home") return <Box flexDirection="column"><Text bold>{launcher ? "Ace launcher" : "What would you like to do?"}</Text>{list(homeItems, state.selected)}</Box>;
+    if (state.screen === "work") return <Box flexDirection="column"><Text bold>Work</Text>{list(workItems, state.selected)}</Box>;
+    if (state.screen === "harness-config") {
+      const entry = harnesses.find((item) => item.id === state.selectedId);
+      return <Box flexDirection="column"><Text bold>{sanitizeTerminalText(entry?.name ?? "Harness")} configuration</Text><Text dimColor>Launch arguments as a JSON array. Model and node flags are passed through when supported by the harness.</Text>{inputLine()}{state.formError && <Text color="red">{sanitizeTerminalText(state.formError)}</Text>}</Box>;
+    }
+    if (state.screen === "chat") {
+      const available = Math.max(1, terminalRows - 8);
+      const transcript = chatHistory.flatMap((turn) => boundedTextLines(`${turn.role}: ${sanitizeTerminalText(turn.text)}`, contentWidth, 3));
+      return <Box flexDirection="column"><Text bold>Chat</Text>{transcript.slice(-available).map((line, index) => <Text key={index}>{line}</Text>)}{chatBusy && <Text color="cyan">Thinking…</Text>}{chatError && <Text color="red">{sanitizeTerminalText(chatError)}</Text>}{inputLine()}</Box>;
+    }
     if (state.screen === "tasks") return <Box flexDirection="column"><Text bold>Choose a task</Text>{!state.providerReady && <Text color="yellow">Provider check still running; you can browse now.</Text>}{list(patterns, state.selected)}</Box>;
     if (state.screen === "templates") return <LocalTemplateList templates={filteredTemplates} selected={state.selected} query={state.templateQuery} width={contentWidth} maxRows={Math.max(3, terminalRows - 5)} />;
     if (state.screen === "template-detail") {
@@ -318,7 +427,10 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
     if (state.screen === "templates") return "Type Filter  ↑↓ Move  Enter Open  Esc Back";
     if (state.screen === "template-detail") return "↑↓ Scroll PgUp/Dn Enter Create Esc Back";
     if (state.screen === "tasks") return "↑↓ Move  Enter Select  Esc Menu  q Exit  ? Keys";
-    if (state.screen === "home") return "↑↓ Move  Enter Select  q Exit  ? Keys";
+    if (state.screen === "home") return launcher ? "↑↓ Move  Enter Launch/Install  → Configure  Esc Exit" : "↑↓ Move  Enter Select  Esc Back  q Exit  ? Keys";
+    if (state.screen === "work") return "↑↓ Move  Enter Select  Esc Back  q Exit  ? Keys";
+    if (state.screen === "chat") return "Enter Send  Esc Back/Cancel  Tab Keys";
+    if (state.screen === "harness-config") return "Enter Save  Esc Back";
     if (state.screen === "task-input" || state.screen === "workflow" || state.screen === "workflow-values" || state.screen === "template-output" || state.screen === "settings-edit") return "Enter Submit  Esc Back  Tab Keys";
     return "Enter/Esc Back  ? Keys";
   }
