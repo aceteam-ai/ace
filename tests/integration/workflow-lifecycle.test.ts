@@ -15,7 +15,7 @@ describe("workflow lifecycle", () => {
         expect(template.description).toBeTruthy();
         expect(template.category).toBeTruthy();
         expect(Array.isArray(template.inputs)).toBe(true);
-        expect(template.inputs.length).toBeGreaterThan(0);
+        expect(template.inputs).toEqual(Object.keys(template.workflow.input_node.params.fields));
       }
     });
 

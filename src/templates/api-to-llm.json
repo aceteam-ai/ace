@@ -1,6 +1,6 @@
 {
   "name": "API to LLM",
-  "description": "Fetch a URL then summarize it. Authoring example: APICall execution requires a compatible node runtime.",
+  "description": "Fetch a URL then summarize it.",
   "input_node": {
     "id": "input",
     "type": "Input",
