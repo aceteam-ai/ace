@@ -48,7 +48,7 @@ For a native coding conversation, choose **Code**. Select Codex and a workspace,
 ```
 ace CLI (TypeScript)
   │
-  ├── ace ──────────────────> Open task picker and offline samples
+  ├── ace ──────────────────> Open Chat/Code/Work launcher
   │                            provision runtime on first live run
   │
   ├── ace workflow create ──> Pick a bundled template, customize params,
@@ -57,16 +57,14 @@ ace CLI (TypeScript)
   └── ace workflow run ─────> Validate input, show real-time progress
                                 │
                                 ▼
-                         python -m aceteam_nodes.cli
+                         Ace local Python runner
                                 │
                                 ▼
-                         aceteam-nodes (Python)
-                           ├── litellm (100+ LLM providers)
-                           ├── httpx (API calls)
-                           └── workflow-engine (DAG execution)
+                         workflow-engine v2 RC (DAG execution)
+                           └── aceteam-nodes (LLM via aceteam-aep, APICall)
 ```
 
-The TypeScript CLI handles file validation, Python detection, and output formatting. Workflow execution is delegated to the `aceteam-nodes` Python package via subprocess, which uses `litellm` for multi-provider LLM support (OpenAI, Anthropic, Google, and 100+ more).
+The TypeScript CLI handles file validation, Python detection, and output formatting. The local Python runner loads the versioned graph through workflow-engine and mounts aceteam-nodes entry points. The LLM node uses aceteam-aep for provider calls.
 
 ## Requirements
 
@@ -75,15 +73,15 @@ The TypeScript CLI handles file validation, Python detection, and output formatt
 - Network access for first-time runtime provisioning; Python 3.12+ is provisioned through uv when needed
 - An LLM provider — cloud API key **or** a local model server — for live LLM workflows (see below)
 
-Ace reuses an available uv installation or downloads its pinned official installer (0.12.12), checks its SHA-256 digest, and installs it under `~/.ace/bin`. The managed environment pins `aceteam-nodes[llm]==0.5.1` and `aceteam-workflow-engine==2.0.0rc8`: newer aceteam-nodes releases removed the CLI entry point used here. Runtime setup is unnecessary for browsing, offline samples, or native harness sessions.
+Ace reuses an available uv installation or downloads its pinned official installer (0.12.12), checks its SHA-256 digest, and installs it under `~/.ace/bin`. The managed v2 environment pins `aceteam-nodes[llm]==0.8.0` and the latest published workflow-engine RC validated here, `aceteam-workflow-engine==2.0.0rc16`. Ace runs the engine directly because the nodes package now supplies entry points rather than a CLI. The older `~/.ace/venv` remains separate from the new `~/.ace/venv-workflow2-rc16`. Runtime setup is unnecessary for browsing, offline samples, or native harness sessions.
 
 ## Commands
 
 ### `ace init`
 
-Optional explicit setup; ordinary task-picker startup skips this wizard. It:
+Optional explicit setup; ordinary launcher startup skips this wizard. It:
 1. Detects Python 3.12+ (shows specific version error if too old)
-2. Creates a managed virtual environment at `~/.ace/venv/`
+2. Creates a managed virtual environment at `~/.ace/venv-workflow2-rc16/`
 3. Installs `aceteam-nodes` into the venv
 4. Prompts for default model and saves `~/.ace/config.yaml`
 
@@ -309,14 +307,11 @@ User tasks override bundled tasks. Existing `system.md` tasks still work;
 `workflow.json` takes precedence when both files exist. Invalid user graphs
 report an error instead of silently selecting a bundled task.
 
-The `api-to-llm` graph is an authoring example. Its URL template, dynamic input
-schema, and response edge match the public node contract, but the APICall node
-in `aceteam-nodes==0.5.1` has an incompatible execution signature with
-`aceteam-workflow-engine==2.0.0rc8`. It validates but cannot execute with that
-pair; use a compatible APICall runtime before running it. A synthetic local
-smoke reproduced the failure before any HTTP request. See the
-[public APICall implementation](https://github.com/aceteam-ai/aceteam-nodes/blob/v0.5.1/src/aceteam_nodes/nodes/api_call.py).
+The `api-to-llm` graph now validates and executes with the v2 RC runtime. A
+credential-free check fetched a loopback fixture and used a synthetic LLM reply;
+no live model call was made. See the [runtime migration and canonical
+references](docs/workflow-engine-runtime.md).
 
-Platform template catalog access and credit-based remote template execution
-remain separate follow-up work under [#5](https://github.com/aceteam-ai/ace/issues/5).
+Authenticated platform template browsing and explicit local or credit-consuming
+remote execution are available through `ace templates` and the Work panel.
 Existing Fabric workflow execution keeps its current command semantics.

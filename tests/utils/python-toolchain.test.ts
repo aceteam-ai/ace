@@ -125,7 +125,7 @@ describe("installAceteamNodes", () => {
 
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "/usr/bin/uv",
-      ["pip", "install", "aceteam-nodes[llm]==0.5.1", "aceteam-workflow-engine==2.0.0rc8", "--python", "/home/user/.ace/venv/bin/python"],
+      ["pip", "install", "aceteam-nodes[llm]==0.8.0", "aceteam-workflow-engine==2.0.0rc16", "--python", "/home/user/.ace/venv/bin/python"],
       { stdio: ["ignore", "inherit", "inherit"] }
     );
   });
