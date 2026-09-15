@@ -1,0 +1,53 @@
+{
+  "input_node": {
+    "type": "Input",
+    "version": "1.0.0",
+    "id": "input",
+    "params": {
+      "fields": {
+        "text": {"title": "StringValue"},
+        "file": {"title": "TextFileValue"}
+      }
+    }
+  },
+  "inner_nodes": [
+    {
+      "type": "AppendToFile",
+      "version": "0.4.0",
+      "id": "append",
+      "params": {
+        "suffix": "_append"
+      }
+    }
+  ],
+  "output_node": {
+    "type": "Output",
+    "version": "1.0.0",
+    "id": "output",
+    "params": {
+      "fields": {
+        "file": {"title": "TextFileValue"}
+      }
+    }
+  },
+  "edges": [
+    {
+      "source_id": "input",
+      "source_key": "text",
+      "target_id": "append",
+      "target_key": "text"
+    },
+    {
+      "source_id": "input",
+      "source_key": "file",
+      "target_id": "append",
+      "target_key": "file"
+    },
+    {
+      "source_id": "append",
+      "source_key": "file",
+      "target_id": "output",
+      "target_key": "file"
+    }
+  ]
+}

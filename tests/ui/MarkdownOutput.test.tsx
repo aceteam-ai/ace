@@ -34,12 +34,14 @@ describe("bounded terminal content", () => {
   });
 
   it("keeps local template lists compact and makes every detail available by paging", () => {
-    const list = render(<LocalTemplateList templates={TEMPLATES} selected={3} query="" width={48} maxRows={5} />);
+    const selected = TEMPLATES.findIndex((template) => template.id === "api-to-llm");
+    expect(selected).toBeGreaterThanOrEqual(0);
+    const list = render(<LocalTemplateList templates={TEMPLATES} selected={selected} query="" width={48} maxRows={5} />);
     expect(list.lastFrame()?.split("\n")).toHaveLength(5);
     expect(list.lastFrame()).toContain("API to LLM");
     list.unmount();
 
-    const template = TEMPLATES[3];
+    const template = TEMPLATES[selected];
     const detail = localTemplateDetailText(template);
     expect(template.runtimeWarning).toBeUndefined();
     expect(detail).toContain("Fetch a URL then summarize it.");

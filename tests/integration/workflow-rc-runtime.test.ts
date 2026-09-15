@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,6 +17,22 @@ afterEach(() => {
   directory = undefined;
 });
 
+describe("pinned workflow-engine example set", () => {
+  it("keeps the three tagged rc16 graph files byte-for-byte", () => {
+    const hashes = {
+      addition: "2b733a9e08133e80cb21b61c57d9e0f5662c96ba6168773f7573d9d983e5f50c",
+      append: "d78d86df0031843e66fa2c61fb121133e2e213085a56f307f12e8bf8eaa8947e",
+      error: "cdf042423c00b23f465d3157694e2bf3535578ad32a3699a8b16af85e8ec0d3b",
+    };
+    const upstream = TEMPLATES.filter((template) => template.source === "workflow-engine-v2.0.0rc16");
+    expect(upstream.map((template) => template.id)).toEqual(Object.keys(hashes).map((id) => `workflow-engine-${id}`));
+    for (const [name, expected] of Object.entries(hashes)) {
+      const file = new URL(`../../src/templates/workflow-engine-${name}.json`, import.meta.url);
+      expect(createHash("sha256").update(readFileSync(file)).digest("hex"), name).toBe(expected);
+    }
+  });
+});
+
 describe.skipIf(!python)("published workflow-engine 2.0 RC boundary", () => {
   it("validates every bundled task and example against the pinned engine", async () => {
     directory = mkdtempSync(join(tmpdir(), "ace-rc-bundle-test-"));
@@ -23,14 +40,14 @@ describe.skipIf(!python)("published workflow-engine 2.0 RC boundary", () => {
       ...BUILTIN_PATTERNS.map((pattern) => ({ id: pattern.id, workflow: pattern.workflow })),
       ...TEMPLATES.map((template) => ({ id: template.id, workflow: template.workflow })),
     ];
-    expect(graphs).toHaveLength(15);
+    expect(graphs).toHaveLength(18);
     for (const { id, workflow } of graphs) {
       const path = join(directory, `${id}.json`);
       writeFileSync(path, JSON.stringify(workflow));
       const result = await validateWorkflow(python!, path);
       expect(result, id).toMatchObject({ valid: true });
     }
-  }, 30_000);
+  }, 45_000);
 
   it("validates and executes bundled graphs through the current node entry points", async () => {
     directory = mkdtempSync(join(tmpdir(), "ace-rc-runner-test-"));
@@ -57,6 +74,12 @@ describe.skipIf(!python)("published workflow-engine 2.0 RC boundary", () => {
     });
     expect(result).toMatchObject({ success: true, output: { response: "synthetic (gpt-4o-mini): hello" } });
     expect(progress).toContain("node_done");
+
+    const addition = getTemplateById("workflow-engine-addition")!;
+    const additionPath = join(directory, "addition.json");
+    writeFileSync(additionPath, JSON.stringify(addition.workflow));
+    const sum = await runWorkflow(python!, additionPath, { c: 3 }, { config, baseDir: join(directory, "runs") });
+    expect(sum).toMatchObject({ success: true, output: { sum: 2070 } });
   });
 
   it("runs the API example against a loopback fixture and returns a real engine result", async () => {
