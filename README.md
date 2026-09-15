@@ -52,6 +52,7 @@ npm link                    # or install globally as `ace`
 
 ## Quick Start
 
+Run `ace` (or `npx @aceteam/ace`) to open the launcher with Chat, Code, Work, and agent harnesses. No setup wizard or provider login is required to browse. Without a configured local provider, supported tasks show clearly labeled prerecorded samples; no model is called.
 ```bash
 # 1. Set up Python venv, install dependencies, create config
 ace init
@@ -134,7 +135,7 @@ Progress appears in the workspace, and Esc cancels the operation. Browse with
 arrow keys, use Enter to select, and open keyboard help with `?` (Tab while
 entering text). Settings and provider setup are available from the home menu.
 
-For a native coding conversation, press Esc and choose **Native coding session**. Select Codex and a workspace, then start a new session or explicitly resume a saved one using its own sign-in and permissions, with conversation, activity, changes, and explicit approval panels. See [native session controls and requirements](docs/native-sessions.md).
+For a native coding conversation, choose **Code**. Select Codex and a workspace, then start a new session or explicitly resume a saved one using its own sign-in and permissions, with conversation, activity, changes, and explicit approval panels. See [native session controls and requirements](docs/native-sessions.md) and [launcher controls and registry](docs/launcher.md).
 
 
 ## How It Works
