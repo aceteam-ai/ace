@@ -204,8 +204,10 @@ export async function installAceteamNodes(pythonPath: string, options?: Operatio
     if (result.code !== 0) throw new Error(result.stderr.trim() || "Could not install the Ace workflow runtime");
     return;
   }
-  const configuredVenv = loadConfig().venv_dir ?? join(homedir(), ".ace", "venv");
-  if (pythonPath === getVenvPythonPath(configuredVenv)) {
+  const configVenv = loadConfig().venv_dir;
+  const managedVenv = configVenv && configVenv !== join(homedir(), ".ace", "venv")
+    ? configVenv : join(homedir(), ".ace", "venv-workflow2-rc16");
+  if (pythonPath === getVenvPythonPath(managedVenv)) {
     // Explicit `ace init` may create the managed venv with stdlib first.
     execFileSync(pythonPath, ["-m", "pip", "install", ACETEAM_NODES_SPEC, WORKFLOW_ENGINE_SPEC], {
       stdio: ["ignore", "inherit", "inherit"],
