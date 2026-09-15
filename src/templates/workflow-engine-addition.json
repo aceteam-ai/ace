@@ -1,0 +1,84 @@
+{
+  "input_node": {
+    "type": "Input",
+    "version": "1.0.0",
+    "id": "input",
+    "params": {
+      "fields": {
+        "c": {"type": "number"}
+      }
+    }
+  },
+  "inner_nodes": [
+    {
+      "type": "ConstantInteger",
+      "version": "0.4.0",
+      "id": "a",
+      "params": {
+        "value": 42
+      }
+    },
+    {
+      "type": "ConstantInteger",
+      "version": "0.4.0",
+      "id": "b",
+      "params": {
+        "value": 2025
+      }
+    },
+    {
+      "type": "Add",
+      "version": "0.4.0",
+      "id": "a+b",
+      "params": {}
+    },
+    {
+      "type": "Add",
+      "version": "0.4.0",
+      "id": "a+b+c",
+      "params": {}
+    }
+  ],
+  "output_node": {
+    "type": "Output",
+    "version": "1.0.0",
+    "id": "output",
+    "params": {
+      "fields": {
+        "sum": {"type": "number"}
+      }
+    }
+  },
+  "edges": [
+    {
+      "source_id": "a",
+      "source_key": "value",
+      "target_id": "a+b",
+      "target_key": "a"
+    },
+    {
+      "source_id": "b",
+      "source_key": "value",
+      "target_id": "a+b",
+      "target_key": "b"
+    },
+    {
+      "source_id": "a+b",
+      "source_key": "sum",
+      "target_id": "a+b+c",
+      "target_key": "a"
+    },
+    {
+      "source_id": "input",
+      "source_key": "c",
+      "target_id": "a+b+c",
+      "target_key": "b"
+    },
+    {
+      "source_id": "a+b+c",
+      "source_key": "sum",
+      "target_id": "output",
+      "target_key": "sum"
+    }
+  ]
+}

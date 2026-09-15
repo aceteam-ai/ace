@@ -44,6 +44,11 @@ async def main():
         "nodes": {
             "Input": "aceteam-workflow-engine:Input",
             "Output": "aceteam-workflow-engine:Output",
+            "Add": "aceteam-workflow-engine:Add",
+            "AppendToFile": "aceteam-workflow-engine:AppendToFile",
+            "ConstantInteger": "aceteam-workflow-engine:ConstantInteger",
+            "ConstantString": "aceteam-workflow-engine:ConstantString",
+            "Error": "aceteam-workflow-engine:Error",
             "LLM": "aceteam-nodes:LLM",
             "APICall": "aceteam-nodes:APICall",
         },

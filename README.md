@@ -115,16 +115,21 @@ List bundled workflow templates.
 
 ```bash
 $ ace workflow list-templates
-ID              Name            Category  Inputs
-────────────────────────────────────────────────────────────
+ID                        Name      Category         Inputs
+───────────────────────────────────────────────────────────────
+workflow-engine-addition  Addition  workflow-engine  c
+workflow-engine-append    Append    workflow-engine  text, file
+workflow-engine-error     Error     workflow-engine
 hello-llm       Hello LLM       basics    prompt
 text-transform  Text Transform  basics    text, instructions
 llm-chain       LLM Chain       chains    prompt
 api-to-llm      API to LLM      chains    url
 
 # Filter by category
-$ ace workflow list-templates --category basics
+$ ace workflow list-templates --category workflow-engine
 ```
+
+The `workflow-engine` category copies the three graphs from the [v2.0.0rc16 library examples](https://github.com/aceteam-ai/workflow-engine/tree/v2.0.0rc16/examples). The other four entries are Ace LLM examples retained for local chat and CLI flows.
 
 ### `ace templates`
 
