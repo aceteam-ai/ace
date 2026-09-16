@@ -51,6 +51,10 @@ outcome, and returns a healthy session to ready. Explicit follow-up input create
 another turn on the same native thread, without spawning or authenticating again.
 Unknown terminal statuses produce a session protocol error.
 
+External peer handoffs use the separate
+[`turn/start.toolOutput` intake contract](codex-external-intake.md). They remain
+native `functionCallOutput` items and are never translated to local user input.
+
 `session.completed`, `session.cancelled`, and `session.error` remain terminal for
 the local session. Transport/protocol failures end the Codex session; another
 ready notification cannot reopen it. A failed native turn allows further explicit
@@ -158,7 +162,7 @@ does not establish interrupt acceptance.
 
 | Component | Evidence |
 | --- | --- |
-| Codex CLI | Exactly `codex-cli 0.153.4`; checked before app-server startup |
+| Codex CLI | Exactly `codex-cli 0.154.0`; checked before app-server startup |
 | Protocol | Local stdio, generated v2 schemas with experimental APIs disabled |
 | Node.js | Tests run with `v22.21.1` |
 | pnpm | `10.33.2` |
@@ -171,7 +175,7 @@ protocol generation were performed without starting a live model session:
 
 ```sh
 codex --version
-codex app-server generate-ts --out /tmp/ace-codex-protocol
+codex app-server generate-json-schema --out /tmp/ace-codex-protocol
 pnpm exec vitest run tests/harness
 pnpm test
 pnpm lint
