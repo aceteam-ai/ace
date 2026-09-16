@@ -5,6 +5,7 @@ import { initCommand } from "./commands/init.js";
 import { loginCommand } from "./commands/login.js";
 import { runCommand } from "./commands/run.js";
 import { workflowCommand } from "./commands/workflow.js";
+import { templatesCommand } from "./commands/templates.js";
 import { startInteractive } from "./commands/interactive.js";
 
 export function createProgram(): Command {
@@ -13,6 +14,7 @@ export function createProgram(): Command {
   program.addCommand(initCommand);
   program.addCommand(runCommand);
   program.addCommand(workflowCommand);
+  program.addCommand(templatesCommand);
   program.addCommand(fabricCommand);
   program.addCommand(loginCommand);
   return program;
