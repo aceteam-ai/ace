@@ -192,7 +192,7 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
         const value = state.screen === "workflow-values" ? state.input : state.input.trim();
         if (state.screen === "task-input") {
           const pattern = patterns.find((item) => item.id === state.selectedId);
-          void begin(pattern?.name ?? "Task", (signal) => service.executePattern(state.selectedId!, value, { signal, model: state.provider?.model, onProgress: (progress) => dispatch({ type: "progress", progress }) }), value);
+          void begin(pattern?.name ?? "Task", (signal) => service.executePattern(state.selectedId!, value, { signal, onProgress: (progress) => dispatch({ type: "progress", progress }) }), value);
         } else if (state.screen === "workflow") {
           try {
             const fields = service.getWorkflowInputs(value);

@@ -12,7 +12,7 @@ import { getWorkflowInputFields } from "../utils/workflow-graph.js";
 import { workflowInputFields, type WorkflowInputField } from "./workflow-form.js";
 
 export interface TaskProgress { message: string; event?: ProgressEvent }
-export interface ExecuteOptions { signal: AbortSignal; model?: string; onProgress: (progress: TaskProgress) => void }
+export interface ExecuteOptions { signal: AbortSignal; onProgress: (progress: TaskProgress) => void }
 export interface WorkspaceTaskService {
   detectProvider(): Promise<ProviderInfo>;
   listPatterns(): PatternDef[];
@@ -43,7 +43,6 @@ export const taskService: WorkspaceTaskService = {
     const python = await ensurePython({ signal: options.signal, onProgress: runtimeProgress(options) });
     options.onProgress({ message: `Running ${pattern.name}` });
     return runPattern(python, pattern, input, {
-      model: options.model,
       signal: options.signal,
       onProgress: (event) => options.onProgress({ message: progressLabel(event), event }),
     });

@@ -61,6 +61,23 @@ describe("terminal workspace", () => {
     expect(view.lastFrame()).toContain("why?");
   });
 
+  it("preserves graph-defined models when provider detection reports a default", async () => {
+    const executePattern = vi.fn(async () => "done");
+    const view = render(<App service={service({
+      detectProvider: async () => ({ provider: "openai", model: "detected-default" }),
+      executePattern,
+    })} />);
+    await tick();
+    view.stdin.write("\r");
+    await tick();
+    view.stdin.write("hello");
+    await tick();
+    view.stdin.write("\r");
+    await tick();
+
+    expect(executePattern).toHaveBeenCalledWith("summarize", "hello", expect.not.objectContaining({ model: expect.anything() }));
+  });
+
   it("keeps long task input bounded while submitting the complete value", async () => {
     const executePattern = vi.fn(async () => "done");
     const view = render(<App service={service({ detectProvider: async () => ({ provider: "openai" }), executePattern })} />);
