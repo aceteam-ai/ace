@@ -100,13 +100,13 @@ export async function main(argv = process.argv): Promise<void> {
   }
 }
 
-export function isMainModule(invoked = process.argv[1]): boolean {
-  if (!invoked) return false;
+export function isMainModule(moduleUrl: string, argvPath = process.argv[1]): boolean {
+  if (!argvPath) return false;
   try {
-    return pathToFileURL(realpathSync(invoked)).href === import.meta.url;
+    return pathToFileURL(realpathSync(argvPath)).href === moduleUrl;
   } catch {
-    return pathToFileURL(invoked).href === import.meta.url;
+    return false;
   }
 }
 
-if (isMainModule()) await main();
+if (isMainModule(import.meta.url)) await main();
