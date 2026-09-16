@@ -88,7 +88,7 @@ export async function parseHandoffReview(raw: string): Promise<HandoffReview> {
   // The resolved workspace is also reviewed, so symlink spelling cannot conceal the actual target.
   const canonicalWorkspace = text(workspaceIdentity.realPath, 4096);
   const input = `Handoff summary\n${summary}\n\nArtifact references\n${artifacts.length
-    ? artifacts.map((entry) => `${entry.path}${entry.label ? ` — ${entry.label}` : ""}`).join("\n") : "(none)"}`;
+    ? artifacts.map((entry) => `${entry.path}${entry.label ? ` - ${entry.label}` : ""}`).join("\n") : "(none)"}`;
   return Object.freeze({ target: Object.freeze({ adapterId: target.adapterId, workspace: canonicalWorkspace }),
     workspaceIdentity: Object.freeze({ ...workspaceIdentity }), summary, artifacts: Object.freeze(artifacts), input });
 }
