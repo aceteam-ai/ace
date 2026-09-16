@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { fabricCommand } from "./commands/fabric.js";
@@ -27,5 +28,13 @@ export async function main(argv = process.argv): Promise<void> {
   await createProgram().parseAsync(argv);
 }
 
-const entry = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;
-if (entry === import.meta.url) await main();
+export function isMainModule(moduleUrl: string, argvPath = process.argv[1]): boolean {
+  if (!argvPath) return false;
+  try {
+    return pathToFileURL(realpathSync(argvPath)).href === moduleUrl;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule(import.meta.url)) await main();
