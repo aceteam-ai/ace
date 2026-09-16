@@ -14,7 +14,7 @@ const threadId = "thread-synthetic";
 const turnId = "turn-synthetic";
 const scope = { threadId, turnId };
 const turn = (status = "inProgress", error: unknown = null) => ({ id: turnId, status, items: [], error });
-const workspace = "/synthetic/workspace";
+const workspace = fileURLToPath(new URL("../../", import.meta.url));
 const startCommand = { type: "session.start" as const, sessionId: "session-synthetic", workspace };
 
 class SyntheticChild extends EventEmitter {
@@ -241,6 +241,20 @@ describe("Codex single-session adapter", () => {
     expect(events.at(-1)).toMatchObject({ type: "session.cancelled" });
   });
 
+  it("does not resolve an approval that a reentrant interrupt prevents from being shown", async () => {
+    const { adapter, child, session, events } = await running();
+    const interrupts: Promise<unknown>[] = [];
+    adapter.observe({ type: "session.observe", session }, (event) => {
+      if (event.type === "session.state" && event.state === "waiting_for_approval") {
+        interrupts.push(adapter.interrupt({ type: "session.interrupt", session }));
+      }
+    });
+    approval(child);
+    await Promise.all(interrupts);
+    expect(events.some((event) => event.type === "approval.requested")).toBe(false);
+    expect(events.some((event) => event.type === "approval.resolved")).toBe(false);
+  });
+
   it("rejects duplicate IDs and stale approvals after an item has ended", async () => {
     const first = await running();
     approval(first.child); approval(first.child);
@@ -414,6 +428,14 @@ describe("Codex single-session adapter", () => {
   it("reports missing installation without inspecting credentials", async () => {
     const adapter = new CodexNativeHarnessAdapter({ processFactory: () => { throw Object.assign(new Error("synthetic missing"), { code: "ENOENT" }); } });
     expect(await adapter.start(startCommand)).toMatchObject({ status: "error", code: "codex_not_installed", message: expect.stringContaining("Install Codex") });
+  });
+
+  it("rejects a missing workspace before attempting to run Codex", async () => {
+    const { adapter, calls } = rig();
+    expect(await adapter.start({ ...startCommand, workspace: "/synthetic/missing-workspace" })).toMatchObject({
+      status: "rejected", code: "invalid_session", message: "The workspace must be an existing directory.",
+    });
+    expect(calls).toHaveLength(0);
   });
 
   it("handles asynchronous executable failure and disposal during startup", async () => {
