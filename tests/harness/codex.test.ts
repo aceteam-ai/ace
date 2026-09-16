@@ -79,13 +79,14 @@ function rig(options: {
     } else {
       children.push(child);
       child.ignoreTerm = options.ignoreTerm ?? false;
+      let turnCounter = 0;
       child.handle = (request) => {
         if (options.handle?.(child, request)) return;
         switch (request.method) {
           case "initialize": child.reply(request, options.initialized ?? { userAgent: "synthetic-codex/0.153.4", codexHome: "/synthetic/native-home" }); break;
           case "account/read": child.reply(request, options.auth ?? { account: { type: "chatgpt", email: "synthetic@example.invalid" }, requiresOpenaiAuth: true }); break;
           case "thread/start": child.reply(request, options.started ?? { thread: { id: threadId }, model: "synthetic-model", modelProvider: "synthetic", cwd, approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: { type: "readOnly" } }); break;
-          case "turn/start": child.reply(request, { turn: turn() }); break;
+          case "turn/start": child.reply(request, { turn: { ...turn(), id: ++turnCounter === 1 ? turnId : `${turnId}-${turnCounter}` } }); break;
           case "turn/interrupt": child.reply(request, {}); break;
         }
       };
@@ -124,7 +125,7 @@ function response(session: NativeHarnessSessionIdentity, event: ReturnType<typeo
 function terminal(child: SyntheticChild, status = "completed", error: unknown = null) { child.notify("turn/completed", { threadId, turn: turn(status, error) }); }
 
 // All protocol streams and subprocess output below are synthetic; no credentials or Codex runtime required.
-describe("Codex single-session adapter", () => {
+describe("Codex native thread adapter", () => {
   it("performs the documented handshake, preserves native permissions, and exposes no account data", async () => {
     const { adapter, child, session, events, calls } = await running();
     expect(TESTED_CODEX_VERSION).toBe("0.153.4");
@@ -160,7 +161,8 @@ describe("Codex single-session adapter", () => {
     expect(events).toContainEqual(expect.objectContaining({ type: "tool.activity", nativeToolCallId: "cmd-1", state: "completed", output: "synthetic" }));
     expect(events).toContainEqual(expect.objectContaining({ type: "change.reported", files: [{ path: "example.ts", kind: "modified" }] }));
     expect(events).toContainEqual(expect.objectContaining({ type: "worker.status", nativeWorkerId: "worker-1", state: "running" }));
-    expect(events.at(-1)).toMatchObject({ type: "session.completed", nativeState: "completed" });
+    expect(events).toContainEqual(expect.objectContaining({ type: "turn.completed", outcome: "completed", nativeTurnId: turnId }));
+    expect(events.at(-1)).toMatchObject({ type: "session.state", state: "ready" });
     expect(events.every((event) => event.adapterId === "codex" && event.nativeSessionId === threadId && event.timestamp === "2026-01-01T00:00:00.000Z")).toBe(true);
     expect(events.map((event) => event.sequence)).toEqual([...events.map((event) => event.sequence)].sort((a, b) => a - b));
   });
@@ -198,16 +200,17 @@ describe("Codex single-session adapter", () => {
     expect(child.messages.filter((message) => message.result)).toEqual([{ id: 7, result: { decision: "decline" } }, { id: "7", result: { decision: "cancel" } }]);
   });
 
-  it.each(["completed", "interrupted", "failed"])("expires pending approvals on terminal %s before callbacks can reply", async (status) => {
+  it.each(["completed", "interrupted", "failed"])("expires pending approvals on turn outcome %s before callbacks can reply", async (status) => {
     const { adapter, session, child, events } = await running();
     approval(child);
     const event = requestEvent(events);
     const replies: Promise<unknown>[] = [];
     adapter.observe({ type: "session.observe", session }, (entry) => { if (entry.type === "approval.resolved") replies.push(adapter.respondToApproval(response(session, event))); });
     terminal(child, status, status === "failed" ? { message: "synthetic failure" } : null);
-    expect(await Promise.all(replies)).toEqual([expect.objectContaining({ status: "rejected", code: "invalid_state" })]);
-    expect(await adapter.sendInput({ type: "session.input", session, input: "too late" })).toMatchObject({ status: "rejected", code: "invalid_state" });
-    expect(events.filter((entry) => ["session.completed", "session.cancelled", "session.error"].includes(entry.type))).toHaveLength(1);
+    expect(await Promise.all(replies)).toEqual([expect.objectContaining({ status: "rejected", code: "stale_approval" })]);
+    expect(events.filter((entry) => entry.type === "turn.completed")).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: "session.state", state: "ready" });
+    expect(await adapter.sendInput({ type: "session.input", session, input: "follow up" })).toMatchObject({ status: "ok" });
   });
 
   it("expires prompts on native resolution or item completion without inventing approval", async () => {
@@ -234,11 +237,12 @@ describe("Codex single-session adapter", () => {
     approval(child); const pending = requestEvent(events);
     expect(await adapter.interrupt({ type: "session.interrupt", session })).toMatchObject({ status: "ok" });
     expect(await adapter.respondToApproval(response(session, pending))).toMatchObject({ code: "stale_approval" });
-    expect(events.some((event) => event.type === "session.cancelled")).toBe(false);
+    expect(events.some((event) => event.type === "turn.completed")).toBe(false);
     expect(child.messages.at(-1)).toMatchObject({ method: "turn/interrupt", params: scope });
     expect(await adapter.interrupt({ type: "session.interrupt", session })).toMatchObject({ code: "invalid_state" });
     terminal(child, "interrupted");
-    expect(events.at(-1)).toMatchObject({ type: "session.cancelled" });
+    expect(events).toContainEqual(expect.objectContaining({ type: "turn.completed", outcome: "interrupted" }));
+    expect(events.at(-1)).toMatchObject({ type: "session.state", state: "ready" });
   });
 
   it("rejects duplicate IDs and stale approvals after an item has ended", async () => {
@@ -279,12 +283,14 @@ describe("Codex single-session adapter", () => {
     expect(events.some((event) => event.type === "approval.requested")).toBe(false);
   });
 
-  it("treats native retry errors as running and auth failures as actionable terminal errors", async () => {
+  it("keeps error notifications busy until native failed turn completion", async () => {
     const { child, events } = await running();
     child.notify("error", { ...scope, willRetry: true, error: { message: "Synthetic transient failure" } });
     expect(events.at(-1)).toMatchObject({ type: "session.state", nativeState: "retrying" });
     child.notify("error", { ...scope, willRetry: false, error: { message: "Synthetic auth failure", codexErrorInfo: "Unauthorized" } });
-    expect(events.at(-1)).toMatchObject({ type: "session.error", error: { code: "codex_authentication_required", message: expect.stringContaining("codex login") } });
+    expect(events.at(-1)).toMatchObject({ type: "session.state", state: "running", nativeState: "turn_failed" });
+    terminal(child, "failed", { message: "Synthetic auth failure", codexErrorInfo: "Unauthorized" });
+    expect(events).toContainEqual(expect.objectContaining({ type: "turn.completed", outcome: "failed", error: expect.objectContaining({ code: "codex_authentication_required", message: expect.stringContaining("codex login") }) }));
   });
 
   it("prevents observer mutation or exceptions from altering replies or other observers", async () => {
@@ -335,7 +341,8 @@ describe("Codex single-session adapter", () => {
       terminal(process, "interrupted"); return true;
     } });
     expect(await adapter.interrupt({ type: "session.interrupt", session })).toMatchObject({ status: "ok" });
-    expect(events.at(-1)).toMatchObject({ type: "session.cancelled" });
+    expect(events).toContainEqual(expect.objectContaining({ type: "turn.completed", outcome: "interrupted" }));
+    expect(events.at(-1)).toMatchObject({ type: "session.state", state: "ready" });
   });
 
   it("renders managed-network context and restricts choices to the offered native decisions", async () => {
@@ -429,6 +436,118 @@ describe("Codex single-session adapter", () => {
     await instance.adapter.dispose({ type: "session.dispose", session: { adapterId: "codex", sessionId: startCommand.sessionId } });
     expect(await starting).toMatchObject({ status: "error", code: "codex_disconnected" });
     expect(instance.children).toHaveLength(0);
+  });
+
+  it.each(["completed", "interrupted", "failed"])("keeps the same native thread alive for follow-up after %s", async (outcome) => {
+    const { adapter, child, session, events, calls } = await running();
+    terminal(child, outcome, outcome === "failed" ? { message: "Synthetic turn failure" } : null);
+    expect(child.signals).toHaveLength(0);
+    expect(await adapter.sendInput({ type: "session.input", session, input: "Follow up" })).toMatchObject({ status: "ok" });
+    child.notify("turn/completed", { threadId, turn: { ...turn("completed"), id: `${turnId}-2` } });
+    expect(events.filter((event) => event.type === "turn.started").map((event) => event.nativeTurnId)).toEqual([turnId, `${turnId}-2`]);
+    expect(events.filter((event) => event.type === "turn.completed").map((event) => event.outcome)).toEqual([outcome, "completed"]);
+    expect(events.filter((event) => event.type === "session.error")).toHaveLength(0);
+    expect(child.messages.filter((message) => message.method === "thread/start")).toHaveLength(1);
+    expect(calls.filter((call) => call.args[0] === "app-server")).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: "session.state", state: "ready" });
+  });
+
+  it("rejects completion-callback input until ready, then preserves a reentrant next turn", async () => {
+    const { adapter, child, session, events } = await running();
+    const early: Promise<unknown>[] = []; const ready: Promise<unknown>[] = [];
+    adapter.observe({ type: "session.observe", session }, (event) => {
+      if (event.type === "turn.completed") early.push(adapter.sendInput({ type: "session.input", session, input: "Too early" }));
+      if (event.type === "session.state" && event.state === "ready" && event.nativeDetails?.completedTurnId === turnId) ready.push(adapter.sendInput({ type: "session.input", session, input: "Next turn" }));
+    });
+    terminal(child);
+    expect(await Promise.all(early)).toEqual([expect.objectContaining({ code: "invalid_state" })]);
+    expect(await Promise.all(ready)).toEqual([expect.objectContaining({ status: "ok" })]);
+    expect(events.at(-1)).toMatchObject({ type: "session.state", state: "running", nativeTurnId: `${turnId}-2` });
+    expect(events.map((event) => event.sequence)).toEqual(events.map((event) => event.sequence).sort((a, b) => a - b));
+  });
+
+  it("ignores old turn events and resolutions while keeping a later approval live", async () => {
+    const { adapter, child, session, events } = await running();
+    approval(child, 7); const old = requestEvent(events); terminal(child);
+    await adapter.sendInput({ type: "session.input", session, input: "Second turn" });
+    const laterTurn = `${turnId}-2`;
+    approval(child, 8, { turnId: laterTurn }); const pending = requestEvent(events, 1);
+    const count = events.length;
+    child.notify("item/agentMessage/delta", { ...scope, itemId: "late", delta: "Old text" });
+    child.notify("item/completed", { ...scope, item: { type: "agentMessage", id: "late", text: "Old text" } });
+    child.notify("error", { ...scope, willRetry: false, error: { message: "Old error" } });
+    child.notify("turn/started", { threadId, turn: turn() }); terminal(child);
+    approval(child, 9); // The request has an expired turn and gets no UI prompt.
+    expect(events).toHaveLength(count);
+    child.notify("serverRequest/resolved", { threadId, requestId: 7 });
+    expect(events.at(-1)).toMatchObject({ type: "session.state", state: "waiting_for_approval" });
+    expect(await adapter.respondToApproval(response(session, old))).toMatchObject({ code: "stale_approval" });
+    expect(await adapter.respondToApproval(response(session, pending, "decline"))).toMatchObject({ status: "ok" });
+    expect(events.filter((event) => event.type === "turn.completed")).toHaveLength(1);
+  });
+
+  it("permits per-turn item ID reuse but rejects ambiguous server request ID reuse", async () => {
+    const { adapter, child, session, events } = await running();
+    child.notify("item/completed", { ...scope, item: { id: "same-item", type: "commandExecution", status: "completed" } });
+    approval(child, 7); terminal(child);
+    await adapter.sendInput({ type: "session.input", session, input: "Second turn" });
+    child.notify("item/completed", { ...scope, turnId: `${turnId}-2`, item: { id: "same-item", type: "commandExecution", status: "completed" } });
+    expect(events.filter((event) => event.type === "tool.activity" && event.toolCallId === "same-item")).toHaveLength(2);
+    approval(child, 7, { turnId: `${turnId}-2` });
+    expect(events.at(-1)).toMatchObject({ type: "session.error", error: { code: "codex_stale_request" } });
+  });
+
+  it("retires completed start RPCs so late replies and old timeouts cannot affect a new turn", async () => {
+    let count = 0; let obsolete: Wire | undefined;
+    const instance = await running({ requestTimeoutMs: 25, handle: (child, request) => {
+      if (request.method !== "turn/start") return false;
+      count += 1;
+      if (count === 1) { obsolete = request; child.notify("turn/started", { threadId, turn: turn() }); terminal(child); }
+      else child.reply(request, { turn: { ...turn(), id: `${turnId}-2` } });
+      return true;
+    } });
+    const { adapter, child, session, events } = instance;
+    expect(await adapter.sendInput({ type: "session.input", session, input: "Second turn" })).toMatchObject({ status: "ok" });
+    child.send({ id: obsolete!.id, error: { code: -32000, message: "Late obsolete response" } });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(events.some((event) => event.type === "session.error")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "session.state", state: "running", nativeTurnId: `${turnId}-2` });
+  });
+
+  it.each(["completed", "failed"])("does not claim interrupt acceptance when %s beats the acknowledgment", async (outcome) => {
+    const { adapter, child, session, events } = await running({ requestTimeoutMs: 25, handle: (process, request) => {
+      if (request.method !== "turn/interrupt") return false;
+      terminal(process, outcome, outcome === "failed" ? { message: "Synthetic failed turn" } : null); return true;
+    } });
+    expect(await adapter.interrupt({ type: "session.interrupt", session })).toMatchObject({ status: "rejected", code: "invalid_state", message: expect.stringContaining("before Codex acknowledged") });
+    expect(await adapter.sendInput({ type: "session.input", session, input: "Next turn" })).toMatchObject({ status: "ok" });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(events.some((event) => event.type === "session.error")).toBe(false);
+    expect(events.filter((event) => event.type === "turn.completed")).toEqual([expect.objectContaining({ outcome })]);
+  });
+
+  it("retires a withheld request write callback when native completion proves receipt", async () => {
+    const { adapter, child, session, events } = await running({ requestTimeoutMs: 25, handle: (process, request) => {
+      if (request.method !== "turn/interrupt") return false;
+      terminal(process, "interrupted"); return true;
+    } });
+    const original = child.stdin.write.bind(child.stdin);
+    let release: (() => void) | undefined;
+    vi.spyOn(child.stdin, "write").mockImplementationOnce(((chunk: any, callback: (error?: Error | null) => void) => original(chunk, (error) => { release = () => callback(error); })) as any);
+    expect(await adapter.interrupt({ type: "session.interrupt", session })).toMatchObject({ status: "ok" });
+    expect(await adapter.sendInput({ type: "session.input", session, input: "Next turn" })).toMatchObject({ status: "ok" });
+    await new Promise((resolve) => setTimeout(resolve, 40)); release?.();
+    expect(events.some((event) => event.type === "session.error")).toBe(false);
+  });
+
+  it("never emits a completed turn or ready state after a reentrant fatal session error", async () => {
+    const { adapter, child, session, events } = await running();
+    approval(child);
+    adapter.observe({ type: "session.observe", session }, (event) => { if (event.type === "approval.resolved") child.exit(17); });
+    terminal(child);
+    expect(events.at(-1)).toMatchObject({ type: "session.error" });
+    expect(events.filter((event) => event.type === "turn.completed")).toHaveLength(0);
+    expect(await adapter.sendInput({ type: "session.input", session, input: "Cannot reopen" })).toMatchObject({ code: "invalid_state" });
   });
 
   it("handles native RPC startup errors and missing methods without retries", async () => {
@@ -530,7 +649,7 @@ describe("real synthetic subprocess boundary", () => {
     const session = started.value; disposals.push(() => adapter.dispose({ type: "session.dispose", session }));
     const events: NativeHarnessEvent[] = []; adapter.observe({ type: "session.observe", session }, (event) => events.push(event));
     await adapter.sendInput({ type: "session.input", session, input: "Synthetic prompt" });
-    await vi.waitFor(() => expect(events.some((event) => event.type === (mode === "happy" ? "session.completed" : "session.error"))).toBe(true));
+    await vi.waitFor(() => expect(events.some((event) => event.type === (mode === "happy" ? "turn.completed" : "session.error"))).toBe(true));
     await adapter.dispose({ type: "session.dispose", session });
     expect(children.every((child) => child.exitCode !== null || child.signalCode !== null)).toBe(true);
   });

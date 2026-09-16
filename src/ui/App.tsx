@@ -13,6 +13,8 @@ export interface WorkspacePanel {
   id: string;
   title: string;
   description: string;
+  providerLabel?: string;
+  dispose?: () => Promise<void>;
   render: (context: { back: () => void; sanitize: (value: string) => string }) => ReactNode;
 }
 export interface AppProps {
@@ -94,6 +96,7 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
     exiting.current = true;
     controller.current?.abort();
     try { await pending.current; } catch { /* the run reports its own failure */ }
+    await Promise.allSettled(panels.map((panel) => Promise.resolve().then(() => panel.dispose?.())));
     onExit?.();
     exit();
   };
@@ -134,6 +137,7 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") { if (state.screen === "running") controller.current?.abort(); else void finishExit(); return; }
+    if (state.screen.startsWith("panel:")) return; // Active panels own text input, help, focus, and back keys.
     const textScreen = state.screen === "templates" || state.screen === "task-input" || state.screen === "workflow" || state.screen === "workflow-values" || state.screen === "template-output" || state.screen === "settings-edit";
     if (((input === "?" && !textScreen) || key.tab) && state.screen !== "running") {
       dispatch({ type: "help" });
@@ -238,12 +242,13 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
     }
   });
 
-  const provider = sanitizeTerminalText(state.providerReady ? providerLabel(state.provider ?? { provider: null }) : "Checking providers…");
+  const activePanel = panels.find((panel) => `panel:${panel.id}` === state.screen);
+  const provider = sanitizeTerminalText(activePanel?.providerLabel ?? (state.providerReady ? providerLabel(state.provider ?? { provider: null }) : "Checking providers…"));
   const body = renderBody();
   return (
     <Box width={Math.max(1, columns)} flexDirection="column" paddingX={columns > 40 ? 2 : 0}>
       <Box justifyContent="space-between"><Text bold color="cyan">AceTeam</Text><Text dimColor>v{pkg.version}</Text></Box>
-      <Text dimColor>{provider}</Text>
+      <Text dimColor wrap="truncate-end">{provider}</Text>
       <Box marginTop={1} flexDirection="column">{body}</Box>
       <Box marginTop={1}><Text dimColor>{footer()}</Text></Box>
     </Box>
@@ -308,6 +313,7 @@ export function App({ service = taskService, panels = [], onExit, shutdownSignal
   }
 
   function footer(): string {
+    if (state.screen.startsWith("panel:")) return "Ctrl+C Exit workspace";
     if (state.screen === "running") return "Esc Cancel";
     if (state.screen === "templates") return "Type Filter  ↑↓ Move  Enter Open  Esc Back";
     if (state.screen === "template-detail") return "↑↓ Scroll PgUp/Dn Enter Create Esc Back";

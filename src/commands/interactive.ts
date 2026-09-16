@@ -2,6 +2,7 @@ import React from "react";
 import { render } from "ink";
 import { App, type WorkspacePanel } from "../ui/App.js";
 import { TerminalSession } from "../ui/terminal.js";
+import { createNativeSessionsPanel } from "../ui/NativeSessionsPanel.js";
 import { taskService, type WorkspaceTaskService } from "../ui/task-service.js";
 
 export interface InteractiveOptions {
@@ -21,17 +22,20 @@ export async function startInteractive(options: InteractiveOptions = {}): Promis
     throw new Error("Interactive mode needs a TTY. Run `ace --help` for command-line usage.");
   }
 
+  const panels = options.panels ?? [createNativeSessionsPanel()];
   const terminal = new TerminalSession(stdin as NodeJS.ReadStream & { setRawMode(mode: boolean): void }, stdout);
   let instance: ReturnType<typeof render> | undefined;
   const shutdown = new AbortController();
   terminal.enter(() => shutdown.abort());
   try {
     instance = render(
-      React.createElement(App, { service: options.service ?? taskService, panels: options.panels, onExit: () => instance?.unmount(), shutdownSignal: shutdown.signal }),
+      React.createElement(App, { service: options.service ?? taskService, panels, onExit: () => instance?.unmount(), shutdownSignal: shutdown.signal }),
       { stdin, stdout, stderr, exitOnCtrlC: false, patchConsole: false }
     );
     await instance.waitUntilExit();
   } finally {
+    await Promise.allSettled(panels.map((panel) => Promise.resolve().then(() => panel.dispose?.())));
+    instance?.unmount();
     terminal.restore();
   }
 }
