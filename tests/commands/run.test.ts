@@ -60,11 +60,26 @@ vi.mock("../../src/utils/node-cache.js", () => ({
   ),
 }));
 
-import { runCommand } from "../../src/commands/run.js";
+import { resolveFreeTextAlias, runCommand } from "../../src/commands/run.js";
 
 describe("runCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+
+  it("keeps multi-word JSON paths in workflow mode", () => {
+    expect(resolveFreeTextAlias("/tmp/my workflow.json", undefined, false)).toEqual({
+      target: "/tmp/my workflow.json",
+      inlineText: undefined,
+    });
+  });
+
+  it("maps unambiguous multi-word text to the default summarize task", () => {
+    expect(resolveFreeTextAlias("explain this sentence", undefined, false)).toEqual({
+      target: "summarize",
+      inlineText: "explain this sentence",
+    });
   });
 
   it("is a Commander command named 'run'", () => {
