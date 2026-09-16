@@ -1,6 +1,7 @@
 export const NATIVE_HARNESS_OPERATIONS = [
   "start",
   "sendInput",
+  "deliverExternalOutput",
   "observe",
   "interrupt",
   "respondToApproval",
@@ -44,6 +45,46 @@ export interface SendInputCommand extends CorrelatedCommand {
   input: string;
 }
 
+export interface NativeExternalOutputSource {
+  /** External collaborators are never represented as the local user. */
+  kind: "peer";
+  /** Stable, transport-owned peer or subscription identity. */
+  id: string;
+  /** Optional human-readable peer label; it grants no authority. */
+  label?: string;
+}
+
+export interface DeliverExternalOutputCommand extends CorrelatedCommand {
+  type: "session.external_output";
+  session: NativeHarnessSessionIdentity;
+  /** Stable journal identity used to reject duplicate native submission. */
+  deliveryId: string;
+  source: NativeExternalOutputSource;
+  content: string;
+}
+
+export type NativeExternalOutputStatus =
+  | "received"
+  | "submitted"
+  | "confirmed_accepted"
+  | "processed"
+  | "unsupported"
+  | "unknown";
+
+export type NativeExternalOutputMode = "idle_started" | "busy_queued";
+
+export interface NativeExternalOutputResult {
+  deliveryId: string;
+  status: NativeExternalOutputStatus;
+  mode?: NativeExternalOutputMode;
+  nativeTurnId?: string;
+  nativeItemId?: string;
+  /** True when this call observed a prior receipt instead of writing again. */
+  duplicate?: boolean;
+  /** Unknown native submission outcomes are never safe for blind replay. */
+  retrySafe: boolean;
+}
+
 export interface ObserveSessionCommand {
   type: "session.observe";
   session: NativeHarnessSessionIdentity;
@@ -80,6 +121,7 @@ export interface DisposeSessionCommand {
 export type NativeHarnessCommand =
   | StartSessionCommand
   | SendInputCommand
+  | DeliverExternalOutputCommand
   | ObserveSessionCommand
   | InterruptSessionCommand
   | RespondToApprovalCommand
@@ -103,6 +145,7 @@ export type NativeHarnessRejectionCode =
   | "duplicate_session"
   | "invalid_session"
   | "invalid_state"
+  | "invalid_external_output"
   | "stale_approval"
   | "approval_mismatch"
   | "invalid_approval_decision";
@@ -202,6 +245,16 @@ export type NativeHarnessEventPayload =
       nativeDetails?: NativeDetails;
     }
   | {
+      type: "external.output.status";
+      deliveryId: string;
+      status: NativeExternalOutputStatus;
+      source: NativeExternalOutputSource;
+      mode?: NativeExternalOutputMode;
+      nativeItemId?: string;
+      retrySafe: boolean;
+      nativeDetails?: NativeDetails;
+    }
+  | {
       type: "change.reported";
       changeId: string;
       files: ReadonlyArray<{
@@ -275,6 +328,9 @@ export interface NativeHarnessAdapter {
   sendInput(
     command: SendInputCommand
   ): Promise<NativeHarnessCommandResult<CommandAccepted>>;
+  deliverExternalOutput(
+    command: DeliverExternalOutputCommand
+  ): Promise<NativeHarnessCommandResult<NativeExternalOutputResult>>;
   observe(
     command: ObserveSessionCommand,
     listener: NativeHarnessEventListener

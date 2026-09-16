@@ -8,10 +8,11 @@ import {
 } from "./codex-protocol.js";
 import { NativeSessionStore, SessionStoreError, captureWorkspaceIdentity, sameWorkspace, type NativeSessionRecord } from "./session-store.js";
 import type {
-  CommandAccepted, DisposeSessionCommand, InterruptSessionCommand,
+  CommandAccepted, DeliverExternalOutputCommand, DisposeSessionCommand, InterruptSessionCommand,
   NativeHarnessAdapter, NativeHarnessCapabilities, NativeHarnessCommandResult,
   NativeHarnessEvent, NativeHarnessEventListener, NativeHarnessEventPayload,
   NativeHarnessObservation, NativeHarnessRejectionCode, NativeHarnessSessionIdentity,
+  NativeExternalOutputMode, NativeExternalOutputResult, NativeExternalOutputSource,
   NativeHarnessSessionState, NativeHarnessTurnOutcome, ObserveSessionCommand, RespondToApprovalCommand,
   ResumeSessionCommand, SendInputCommand, SessionDisposed, StartSessionCommand,
 } from "./types.js";
@@ -49,6 +50,18 @@ interface ActiveTurn {
   interruptCall?: CodexRpcCall;
 }
 
+interface ExternalDelivery {
+  deliveryId: string;
+  source: NativeExternalOutputSource;
+  encodedOutput: string;
+  status: NativeExternalOutputResult["status"];
+  mode: NativeExternalOutputMode;
+  correlationId?: string;
+  nativeTurnId?: string;
+  nativeItemId?: string;
+  call?: CodexRpcCall;
+}
+
 interface Session {
   identity: NativeHarnessSessionIdentity;
   state: NativeHarnessSessionState | "terminal" | "disposed";
@@ -71,7 +84,12 @@ interface Session {
   failure?: CodexError;
   cleanup?: Promise<void>;
   resuming?: boolean;
+  externalDeliveries: Map<string, ExternalDelivery>;
+  externalSubmitting: boolean;
 }
+
+const EXTERNAL_OUTPUT_NAME = "peer_message";
+const EXTERNAL_OUTPUT_NAMESPACE = "aceteam.external";
 
 function rejected(code: NativeHarnessRejectionCode, message: string): NativeHarnessCommandResult<never> {
   return { status: "rejected", code, message };
@@ -108,6 +126,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
   readonly capabilities: NativeHarnessCapabilities = Object.freeze({
     start: Object.freeze({ supported: true as const }),
     sendInput: Object.freeze({ supported: true as const }),
+    deliverExternalOutput: Object.freeze({ supported: true as const }),
     observe: Object.freeze({ supported: true as const }),
     interrupt: Object.freeze({ supported: true as const }),
     respondToApproval: Object.freeze({ supported: true as const }),
@@ -166,6 +185,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
       state: "starting", sequence: 0, listeners: new Set(), approvals: new Map(),
       seenRequests: new Set(), completedItems: new Set(), turnRequested: false,
       interruptRequested: false, completedTurns: new Set(), eventQueue: [], publishing: false, resuming,
+      externalDeliveries: new Map(), externalSubmitting: false,
     };
     this.session = session;
     this.usedSessionIds.add(command.sessionId);
@@ -286,6 +306,117 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     }
   }
 
+  async deliverExternalOutput(command: DeliverExternalOutputCommand): Promise<NativeHarnessCommandResult<NativeExternalOutputResult>> {
+    const valid = this.validate(command.session);
+    if (valid) return valid;
+    const session = this.session!;
+    const prior = session.externalDeliveries.get(command.deliveryId);
+    if (prior) return { status: "ok", value: { ...this.externalResult(prior), duplicate: true } };
+    const source = command.source;
+    if (!command.deliveryId.trim() || !object(source) || source.kind !== "peer" || typeof source.id !== "string" ||
+        !source.id.trim() || (source.label !== undefined && typeof source.label !== "string") ||
+        Object.keys(source).some((key) => !["kind", "id", "label"].includes(key)) || !command.content.trim()) {
+      return rejected("invalid_external_output", "External output requires a delivery ID, peer identity, and nonempty content.");
+    }
+    if (session.externalSubmitting) {
+      return rejected("invalid_state", "Another external output submission is still being reconciled.");
+    }
+    const active = session.activeTurn;
+    const busy = Boolean(active && !active.completed);
+    if ((!busy && session.state !== "ready") ||
+        (busy && session.state !== "running" && session.state !== "waiting_for_approval")) {
+      return rejected("invalid_state", "External output requires a ready session or a live native turn.");
+    }
+    const encodedOutput = JSON.stringify({
+      type: "aceteam.peer_message",
+      deliveryId: command.deliveryId,
+      source: { kind: "peer", id: source.id, ...(source.label === undefined ? {} : { label: source.label }) },
+      content: command.content,
+    });
+    if (Buffer.byteLength(encodedOutput) > 512 * 1024) {
+      return rejected("invalid_external_output", "External output exceeds the bounded native intake size.");
+    }
+    const mode: NativeExternalOutputMode = busy ? "busy_queued" : "idle_started";
+    const delivery: ExternalDelivery = {
+      deliveryId: command.deliveryId, source: structuredClone(source), encodedOutput,
+      status: "received", mode, correlationId: command.correlationId,
+    };
+    session.externalDeliveries.set(delivery.deliveryId, delivery);
+    session.externalSubmitting = true;
+    this.externalStatus(session, delivery, "received");
+
+    let idleActive: ActiveTurn | undefined;
+    if (!busy) {
+      idleActive = { started: false, completed: false };
+      session.activeTurn = idleActive;
+      session.turnId = undefined;
+      session.turnRequested = true;
+      session.interruptRequested = false;
+      session.completedItems.clear();
+      this.state(session, "running", "turn/start.toolOutput", {}, command.correlationId);
+    }
+    try {
+      this.assertOpen(session);
+      const call = session.rpc!.beginRequest("turn/start", {
+        threadId: session.identity.nativeSessionId,
+        input: [],
+        toolOutput: {
+          name: EXTERNAL_OUTPUT_NAME,
+          namespace: EXTERNAL_OUTPUT_NAMESPACE,
+          output: encodedOutput,
+        },
+      });
+      delivery.call = call;
+      if (idleActive) idleActive.startCall = call;
+      await call.submitted;
+      if (delivery.status === "received") this.externalStatus(session, delivery, "submitted");
+      const response = await call.result;
+      if (delivery.status === "unknown" || delivery.status === "unsupported") return { status: "ok", value: this.externalResult(delivery) };
+      const turn = record(response.turn, "turn/start.turn");
+      const nativeTurnId = text(turn.id, "turn.id");
+      delivery.nativeTurnId = nativeTurnId;
+      if (!session.completedTurns.has(nativeTurnId)) {
+        this.bindTurn(session, nativeTurnId);
+        if (!session.completedTurns.has(nativeTurnId)) {
+          if (turn.status === "inProgress") {
+            if (idleActive) this.state(session, this.runningState(session), "inProgress", { turn });
+          } else {
+            this.finishTurn(session, turn);
+          }
+        }
+      }
+      if (delivery.status !== "processed") this.externalStatus(session, delivery, "confirmed_accepted");
+      return { status: "ok", value: this.externalResult(delivery) };
+    } catch (error) {
+      if (delivery.status === "processed" || delivery.status === "confirmed_accepted" || delivery.status === "unknown") {
+        return { status: "ok", value: this.externalResult(delivery) };
+      }
+      const failure = session.failure ?? asCodexError(error);
+      const rpcError = object(failure.details?.rpcError) ? failure.details.rpcError : undefined;
+      const unsupported = failure.code === "incompatible_codex_protocol" &&
+        (rpcError?.code === -32601 || rpcError?.code === -32602);
+      if (unsupported) {
+        this.externalStatus(session, delivery, "unsupported", { failure: { code: failure.code, message: failure.message } });
+        if (idleActive && session.activeTurn === idleActive && !idleActive.id) {
+          session.activeTurn = undefined;
+          session.turnRequested = false;
+          session.turnId = undefined;
+          this.state(session, "ready", "idle", { externalIntakeUnsupported: true }, command.correlationId);
+        }
+        return { status: "unsupported", operation: "deliverExternalOutput",
+          reason: `Codex ${TESTED_CODEX_VERSION} rejected documented turn/start toolOutput intake. Keep this delivery queued for manual review.` };
+      }
+      this.externalStatus(session, delivery, "unknown", {
+        failure: { code: failure.code, message: failure.message },
+        action: "Do not replay automatically; reconcile native history or keep the delivery for manual review.",
+      });
+      this.fail(session, failure);
+      return { status: "ok", value: this.externalResult(delivery) };
+    } finally {
+      session.externalSubmitting = false;
+    }
+  }
+
   observe(command: ObserveSessionCommand, listener: NativeHarnessEventListener): NativeHarnessCommandResult<NativeHarnessObservation> {
     const valid = this.validate(command.session);
     if (valid) return valid;
@@ -294,6 +425,24 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     // Expose current effective permissions after asynchronous start; never replay transcript/approvals.
     if (session.snapshot) this.deliver(listener, session.snapshot);
     return { status: "ok", value: { dispose: () => { session.listeners.delete(listener); } } };
+  }
+
+  private externalResult(delivery: ExternalDelivery): NativeExternalOutputResult {
+    return {
+      deliveryId: delivery.deliveryId, status: delivery.status, mode: delivery.mode,
+      nativeTurnId: delivery.nativeTurnId, nativeItemId: delivery.nativeItemId,
+      retrySafe: delivery.status === "received",
+    };
+  }
+
+  private externalStatus(session: Session, delivery: ExternalDelivery, status: NativeExternalOutputResult["status"],
+    nativeDetails?: JsonObject): void {
+    delivery.status = status;
+    this.publish(session, {
+      type: "external.output.status", deliveryId: delivery.deliveryId, status,
+      source: structuredClone(delivery.source), mode: delivery.mode, nativeItemId: delivery.nativeItemId,
+      retrySafe: status === "received", nativeDetails,
+    }, delivery.correlationId ?? delivery.deliveryId);
   }
 
   async interrupt(command: InterruptSessionCommand): Promise<NativeHarnessCommandResult<CommandAccepted>> {
@@ -417,6 +566,14 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
 
   private fail(session: Session, error: CodexError): void {
     if (this.terminal(session)) return;
+    for (const delivery of session.externalDeliveries.values()) {
+      if (delivery.status === "received" || delivery.status === "submitted") {
+        this.externalStatus(session, delivery, "unknown", {
+          failure: { code: error.code, message: error.message },
+          action: "Do not replay automatically; reconcile native history or keep the delivery for manual review.",
+        });
+      }
+    }
     session.failure = error;
     session.state = "terminal";
     this.clearApprovals(session, "session_error");
@@ -686,6 +843,37 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
         if (!Array.isArray(item.content)) throw new CodexError("incompatible_codex_protocol", "Invalid Codex user content.");
         const content = item.content.filter((part) => object(part) && part.type === "text" && typeof part.text === "string");
         this.publish(session, { type: "conversation.message", role: "user", text: content.map((part) => part.text).join("\n"), nativeMessageId: id, nativeDetails: details });
+      }
+      return;
+    }
+    if (type === "functionCallOutput") {
+      const name = text(item.name, "functionCallOutput.name");
+      if (!(item.namespace === null || item.namespace === undefined || typeof item.namespace === "string") ||
+          !(typeof item.output === "string" || Array.isArray(item.output))) {
+        throw new CodexError("incompatible_codex_protocol", "Invalid Codex function-call output.", details);
+      }
+      const namespace = typeof item.namespace === "string" ? item.namespace : undefined;
+      this.publish(session, {
+        type: "tool.activity", toolCallId: id, nativeToolCallId: id,
+        name: namespace ? `${namespace}.${name}` : name,
+        state: completed ? "completed" : "started", output: item.output,
+        nativeState: completed ? "completed" : "inProgress", nativeDetails: details,
+      });
+      if (completed && name === EXTERNAL_OUTPUT_NAME && namespace === EXTERNAL_OUTPUT_NAMESPACE &&
+          typeof item.output === "string") {
+        const delivery = [...session.externalDeliveries.values()].find((candidate) =>
+          candidate.encodedOutput === item.output &&
+          candidate.status !== "unknown" && candidate.status !== "unsupported");
+        if (delivery && delivery.status !== "processed") {
+          delivery.nativeTurnId = session.turnId;
+          delivery.nativeItemId = id;
+          delivery.call?.completeFromNative({
+            turn: { id: session.turnId, status: "inProgress", items: [item], error: null },
+          });
+          this.externalStatus(session, delivery, "processed", {
+            nativeItemId: id, nativeTurnId: session.turnId, itemType: "functionCallOutput",
+          });
+        }
       }
       return;
     }

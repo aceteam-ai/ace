@@ -3,8 +3,8 @@ import { NativeSessionStore, SessionStoreError, captureWorkspaceIdentity, sameWo
 import type { NativeHarnessAdapter, NativeHarnessCapabilities, NativeHarnessCommandResult,
   NativeHarnessSessionIdentity, NativeHarnessObservation, NativeHarnessEventListener, NativeHarnessEvent,
   StartSessionCommand, ResumeSessionCommand, DisposeSessionCommand, SessionDisposed,
-  ObserveSessionCommand, SendInputCommand, InterruptSessionCommand, RespondToApprovalCommand,
-  CommandAccepted } from "./types.js";
+  ObserveSessionCommand, SendInputCommand, DeliverExternalOutputCommand, InterruptSessionCommand, RespondToApprovalCommand,
+  CommandAccepted, NativeExternalOutputResult } from "./types.js";
 
 export interface SessionManagerNotice { code: string; message: string; recoveryPath?: string }
 export interface SessionCandidate {
@@ -332,6 +332,10 @@ class ManagedAdapter implements NativeHarnessAdapter {
   }
   sendInput(command: SendInputCommand): Promise<NativeHarnessCommandResult<CommandAccepted>> {
     return this.live(command.session) ? this.adapter.sendInput(command) : Promise.resolve(rejected("Input requires a live managed session."));
+  }
+  deliverExternalOutput(command: DeliverExternalOutputCommand): Promise<NativeHarnessCommandResult<NativeExternalOutputResult>> {
+    return this.live(command.session) ? this.adapter.deliverExternalOutput(command)
+      : Promise.resolve(rejected("External output requires a live managed session."));
   }
   interrupt(command: InterruptSessionCommand): Promise<NativeHarnessCommandResult<CommandAccepted>> {
     return this.live(command.session) ? this.adapter.interrupt(command) : Promise.resolve(rejected("Interrupt requires a live managed session."));
