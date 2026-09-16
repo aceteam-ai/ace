@@ -17,7 +17,7 @@ describe("reviewed local handoff", () => {
     const review = await parseHandoffReview(JSON.stringify(value));
     value.summary = "Changed later";
     expect(review.summary).toBe("First line\nSecond    line");
-    expect(review.input).toBe("Handoff summary\nFirst line\nSecond    line\n\nArtifact references\nmissing-example.ts — Reference only");
+    expect(review.input).toBe("Handoff summary\nFirst line\nSecond    line\n\nArtifact references\nmissing-example.ts - Reference only");
     for (const item of [review, review.target, review.workspaceIdentity, review.artifacts, review.artifacts[0]]) expect(Object.isFrozen(item)).toBe(true);
   });
 
