@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -35,6 +36,8 @@ interface PendingApproval {
   choices: Set<string>;
   details: JsonObject;
   sentDecision?: string;
+  decisionSubmitted: boolean;
+  requested: boolean;
 }
 
 interface Session {
@@ -87,6 +90,10 @@ function nativeError(error: JsonObject): CodexError {
     { nativeError: error });
 }
 
+function isDirectory(path: string): boolean {
+  try { return statSync(path).isDirectory(); } catch { return false; }
+}
+
 /** One Ace-created thread and one turn. Terminal events end this session (S1 contract). */
 export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
   readonly adapterId = "codex";
@@ -125,6 +132,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     if (this.usedSessionIds.has(command.sessionId)) return rejected("duplicate_session", "This local session ID has already been used.");
     if (this.session) return rejected("invalid_state", "Dispose the existing Codex session before starting another.");
     if (!command.sessionId || !isAbsolute(command.workspace)) return rejected("invalid_session", "A session ID and absolute workspace directory are required.");
+    if (!isDirectory(command.workspace)) return rejected("invalid_session", "The workspace must be an existing directory.");
     // Never forward generic config, approval, sandbox, environment, auth or transport options.
     const nativeOptions = command.nativeOptions ?? {};
     if (!object(nativeOptions) || Object.keys(nativeOptions).some((key) => key !== "model") ||
@@ -273,6 +281,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     approval.sentDecision = command.decision; // Claim before write to reject concurrent replies.
     try {
       await session.rpc!.send({ id: approval.requestId, result: { decision: command.decision } });
+      approval.decisionSubmitted = true;
       if (session.failure) throw session.failure;
       // Native serverRequest/resolved or item/completed clears the UI prompt.
       return { status: "ok", value: { accepted: true } };
@@ -485,6 +494,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
       id: `codex-approval-${this.approvalNamespace}-${++this.nextApproval}`, requestId, itemId,
       correlationId: `codex-request:${JSON.stringify([session.identity.sessionId, session.identity.nativeSessionId, session.turnId, requestId])}`, choices: new Set(choices),
       details: structuredClone({ method, params, requestId, permissionContext: session.permissions }),
+      decisionSubmitted: false, requested: false,
     };
     session.approvals.set(approval.id, approval);
     this.state(session, "waiting_for_approval", method, { permissionContext: session.permissions });
@@ -493,6 +503,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     const prompt = network ? `Codex requests network access: ${String(network.host ?? "unknown host")} (${String(network.protocol ?? "unknown protocol")}).`
       : method === "item/fileChange/requestApproval" ? "Codex requests approval for file changes."
       : `Codex requests command approval${typeof params.command === "string" ? `: ${params.command}` : "."}`;
+    approval.requested = true;
     this.publish(session, { type: "approval.requested", approvalId: approval.id, nativeApprovalId: String(requestId),
       choices, prompt: typeof params.reason === "string" ? `${prompt}\n${params.reason}` : prompt, nativeDetails: approval.details,
     }, approval.correlationId);
@@ -500,9 +511,10 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
 
   private resolveApproval(session: Session, approval: PendingApproval, reason: string): void {
     session.approvals.delete(approval.id);
+    if (!approval.requested) return;
     this.publish(session, { type: "approval.resolved", approvalId: approval.id,
       nativeApprovalId: String(approval.requestId), decision: approval.sentDecision ?? "expired",
-      nativeDetails: { ...approval.details, resolution: reason, decisionSubmitted: approval.sentDecision !== undefined },
+      nativeDetails: { ...approval.details, resolution: reason, decisionSubmitted: approval.decisionSubmitted },
     }, approval.correlationId);
   }
 
