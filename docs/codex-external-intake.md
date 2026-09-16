@@ -56,11 +56,14 @@ Observers receive `external.output.status` events with these distinct states:
 | `unsupported` | Codex conclusively rejected the documented method or parameters. Keep the delivery available for manual review. |
 | `unknown` | Submission may have reached Codex, but no conclusive response survived. Do not replay automatically. |
 
-Idle delivery reserves and starts the one native turn before any asynchronous
-write. Busy delivery uses Codex's native queue on the existing turn and does not
-clear or answer pending approvals. Submissions are serialized. Repeating a
-`deliveryId` returns the prior evidence with `duplicate: true` and never writes
-again, including after an unknown result.
+Idle delivery reserves and starts the one native turn before any observer or
+asynchronous write. Busy delivery waits locally for the active turn to finish,
+then reserves a successor tool-output turn; it does not clear or answer pending
+approvals, and user input cannot overtake that queued delivery. Submissions are
+serialized. Repeating a `deliveryId` on the same connection returns the prior
+evidence with `duplicate: true` and never writes again, including after an
+unknown result. Durable duplicate suppression across restart belongs to the #18
+consumer journal; this adapter intentionally does not persist delivery records.
 
 Transport failure after submission is surfaced as `unknown` with
 `retrySafe: false` and terminates the local connection under the existing
@@ -70,9 +73,10 @@ Codex did not accept the turn.
 
 ## Verification boundary
 
-Synthetic tests cover idle submission and persisted provenance, busy queuing
-with a live approval, duplicate notification, stale thread identity, unsupported
-native intake, lost-response ambiguity, and peer text that asks to approve tools.
+Synthetic tests cover idle submission and persisted provenance, busy successor
+queuing with a live approval, observer reentrancy, malformed envelopes, duplicate
+notification, stale thread identity, unsupported native intake, lost-response
+ambiguity, and peer text that asks to approve tools.
 They use authored protocol fixtures and no credentials or model calls.
 
 No native-auth smoke test was run. The synthetic evidence proves request shape,

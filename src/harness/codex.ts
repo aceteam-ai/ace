@@ -48,6 +48,8 @@ interface ActiveTurn {
   outcome?: NativeHarnessTurnOutcome;
   startCall?: CodexRpcCall;
   interruptCall?: CodexRpcCall;
+  settled: Promise<void>;
+  settle: () => void;
 }
 
 interface ExternalDelivery {
@@ -97,6 +99,12 @@ function rejected(code: NativeHarnessRejectionCode, message: string): NativeHarn
 
 function errorResult(error: CodexError): NativeHarnessCommandResult<never> {
   return { status: "error", code: error.code, message: error.message, nativeDetails: error.details };
+}
+
+function activeTurn(): ActiveTurn {
+  let settle = () => {};
+  const settled = new Promise<void>((resolve) => { settle = resolve; });
+  return { started: false, completed: false, settled, settle };
 }
 
 function text(value: unknown, field: string): string {
@@ -273,9 +281,9 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     const valid = this.validate(command.session);
     if (valid) return valid;
     const session = this.session!;
-    if (session.state !== "ready" || session.activeTurn) return rejected("invalid_state", "Input requires a ready session. Steering an active turn is unsupported.");
+    if (session.state !== "ready" || session.activeTurn || session.externalSubmitting) return rejected("invalid_state", "Input requires a ready session. Steering an active turn is unsupported.");
     if (!command.input.trim()) return rejected("invalid_state", "Input must contain text.");
-    const active: ActiveTurn = { started: false, completed: false };
+    const active = activeTurn();
     session.activeTurn = active; // Reserve before awaiting or notifying observers.
     session.turnId = undefined;
     session.turnRequested = true;
@@ -310,6 +318,9 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     const valid = this.validate(command.session);
     if (valid) return valid;
     const session = this.session!;
+    if (typeof command.deliveryId !== "string" || typeof command.content !== "string") {
+      return rejected("invalid_external_output", "External output requires a delivery ID, peer identity, and nonempty content.");
+    }
     const prior = session.externalDeliveries.get(command.deliveryId);
     if (prior) return { status: "ok", value: { ...this.externalResult(prior), duplicate: true } };
     const source = command.source;
@@ -321,8 +332,8 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     if (session.externalSubmitting) {
       return rejected("invalid_state", "Another external output submission is still being reconciled.");
     }
-    const active = session.activeTurn;
-    const busy = Boolean(active && !active.completed);
+    const queuedBehind = session.activeTurn;
+    const busy = Boolean(queuedBehind && !queuedBehind.completed);
     if ((!busy && session.state !== "ready") ||
         (busy && session.state !== "running" && session.state !== "waiting_for_approval")) {
       return rejected("invalid_state", "External output requires a ready session or a live native turn.");
@@ -341,21 +352,34 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
       deliveryId: command.deliveryId, source: structuredClone(source), encodedOutput,
       status: "received", mode, correlationId: command.correlationId,
     };
-    session.externalDeliveries.set(delivery.deliveryId, delivery);
-    session.externalSubmitting = true;
-    this.externalStatus(session, delivery, "received");
-
     let idleActive: ActiveTurn | undefined;
     if (!busy) {
-      idleActive = { started: false, completed: false };
+      idleActive = activeTurn();
       session.activeTurn = idleActive;
       session.turnId = undefined;
       session.turnRequested = true;
       session.interruptRequested = false;
       session.completedItems.clear();
-      this.state(session, "running", "turn/start.toolOutput", {}, command.correlationId);
     }
+    session.externalDeliveries.set(delivery.deliveryId, delivery);
+    session.externalSubmitting = true;
+    this.externalStatus(session, delivery, "received");
+    if (!busy) this.state(session, "running", "turn/start.toolOutput", {}, command.correlationId);
     try {
+      if (queuedBehind && !queuedBehind.completed) {
+        await queuedBehind.settled;
+        this.assertOpen(session);
+        if (session.state !== "ready" || session.activeTurn) {
+          throw new CodexError("invalid_state", "The native turn did not return to an idle state for queued external output.");
+        }
+        idleActive = activeTurn();
+        session.activeTurn = idleActive;
+        session.turnId = undefined;
+        session.turnRequested = true;
+        session.interruptRequested = false;
+        session.completedItems.clear();
+        this.state(session, "running", "turn/start.toolOutput", {}, command.correlationId);
+      }
       this.assertOpen(session);
       const call = session.rpc!.beginRequest("turn/start", {
         threadId: session.identity.nativeSessionId,
@@ -398,6 +422,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
       if (unsupported) {
         this.externalStatus(session, delivery, "unsupported", { failure: { code: failure.code, message: failure.message } });
         if (idleActive && session.activeTurn === idleActive && !idleActive.id) {
+          idleActive.settle();
           session.activeTurn = undefined;
           session.turnRequested = false;
           session.turnId = undefined;
@@ -537,6 +562,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     if (valid) return valid;
     const session = this.session!;
     session.state = "disposed";
+    session.activeTurn?.settle();
     session.approvals.clear();
     session.listeners.clear();
     await this.cleanup(session);
@@ -566,6 +592,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
 
   private fail(session: Session, error: CodexError): void {
     if (this.terminal(session)) return;
+    session.activeTurn?.settle();
     for (const delivery of session.externalDeliveries.values()) {
       if (delivery.status === "received" || delivery.status === "submitted") {
         this.externalStatus(session, delivery, "unknown", {
@@ -763,6 +790,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
       session.turnId = undefined;
       session.interruptRequested = false;
       this.state(session, "ready", "idle", { completedTurnId: nativeTurnId }, nativeTurnId);
+      active.settle();
     });
   }
 
