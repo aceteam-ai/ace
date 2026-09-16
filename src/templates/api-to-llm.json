@@ -1,12 +1,16 @@
 {
   "name": "API to LLM",
-  "description": "Fetch a URL then summarize the content with an LLM.",
+  "description": "Fetch a URL then summarize it. Authoring example: APICall execution requires a compatible node runtime.",
   "input_node": {
     "id": "input",
     "type": "Input",
     "params": {
       "fields": {
-        "url": { "type": "string", "title": "URL", "description": "The URL to fetch and summarize" }
+        "url": {
+          "type": "string",
+          "title": "URL",
+          "description": "The URL to fetch and summarize"
+        }
       }
     }
   },
@@ -15,7 +19,11 @@
     "type": "Output",
     "params": {
       "fields": {
-        "summary": { "type": "string", "title": "Summary", "description": "LLM summary of the fetched content" }
+        "summary": {
+          "type": "string",
+          "title": "Summary",
+          "description": "LLM summary of the fetched content"
+        }
       }
     }
   },
@@ -24,7 +32,13 @@
       "id": "fetch",
       "type": "APICall",
       "params": {
-        "method": "GET"
+        "method": "GET",
+        "url": "{{ url }}",
+        "parameters": {
+          "url": {
+            "type": "string"
+          }
+        }
       }
     },
     {
@@ -37,8 +51,23 @@
     }
   ],
   "edges": [
-    { "source_id": "input", "source_key": "url", "target_id": "fetch", "target_key": "url" },
-    { "source_id": "fetch", "source_key": "response_body", "target_id": "summarize", "target_key": "prompt" },
-    { "source_id": "summarize", "source_key": "response", "target_id": "output", "target_key": "summary" }
+    {
+      "source_id": "input",
+      "source_key": "url",
+      "target_id": "fetch",
+      "target_key": "url"
+    },
+    {
+      "source_id": "fetch",
+      "source_key": "response",
+      "target_id": "summarize",
+      "target_key": "prompt"
+    },
+    {
+      "source_id": "summarize",
+      "source_key": "response",
+      "target_id": "output",
+      "target_key": "summary"
+    }
   ]
 }

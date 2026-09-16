@@ -1,0 +1,50 @@
+{
+  "name": "Police Report Writer",
+  "description": "Draft a structured police incident report from officer notes or dictation",
+  "input_node": {
+    "id": "input",
+    "type": "Input",
+    "params": {
+      "fields": {
+        "prompt": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "output_node": {
+    "id": "output",
+    "type": "Output",
+    "params": {
+      "fields": {
+        "response": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "inner_nodes": [
+    {
+      "id": "llm",
+      "type": "LLM",
+      "params": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a professional police report writer with expertise in Canadian law enforcement documentation. Transform the officer's raw notes or dictation into a formatted incident report.\n\nYour output MUST follow this format:\n\n## Incident Report\n\n### Header\n- **Date/Time of Occurrence**: [extracted or NOT PROVIDED]\n- **Date/Time Reported**: [extracted or NOT PROVIDED]\n- **Location**: [extracted or NOT PROVIDED]\n- **Incident Type**: [extracted or NOT PROVIDED]\n- **Reporting Officer**: [extracted or NOT PROVIDED]\n\n### Involved Persons\nFor each person:\n- **Role**: [Complainant/Suspect/Witness]\n- **Name**: [name or NOT PROVIDED]\n- **Description**: [physical description if provided]\n- **Contact**: [phone/address if provided]\n\n### Narrative\n[Chronological account in third person, past tense. Factual and objective. Include direct quotes where provided. Reference Criminal Code or HTA sections when applicable.]\n\n### Evidence/Property\n- [item description, location found, disposition]\n\n### Fields Requiring Verification\n- [List any fields where the AI was uncertain, marked with reason]\n\nGuidelines:\n- Use formal law enforcement language\n- 24-hour time format, precise locations\n- Do NOT fabricate details — use NOT PROVIDED for missing fields\n- Flag uncertain interpretations with [VERIFY: reason]\n- Ontario Criminal Code references must be accurate or flagged"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source_id": "input",
+      "source_key": "prompt",
+      "target_id": "llm",
+      "target_key": "prompt"
+    },
+    {
+      "source_id": "llm",
+      "source_key": "response",
+      "target_id": "output",
+      "target_key": "response"
+    }
+  ]
+}

@@ -167,3 +167,29 @@ describe("patternToWorkflow — v2 schema", () => {
     }
   });
 });
+
+describe("canonical graph execution", () => {
+  it("preserves multi-node graphs and their configured models", async () => {
+    const { definePattern } = await import("../../src/patterns/index.js");
+    const { TEMPLATES } = await import("../../src/templates/index.js");
+    const source = structuredClone(TEMPLATES.find((t) => t.id === "llm-chain")!.workflow);
+    source.inner_nodes[0].params.model = "first-model";
+    source.inner_nodes[1].params.model = "second-model";
+    const task = definePattern("chain", "user", source);
+    const result = patternToWorkflow(task);
+    expect(result).toEqual(source);
+    expect(result).not.toBe(source);
+    const overridden = patternToWorkflow(task, "override-model");
+    expect(overridden.inner_nodes.map((node) => node.params.model)).toEqual(["override-model", "override-model"]);
+    expect(source.inner_nodes.map((node) => node.params.model)).toEqual(["first-model", "second-model"]);
+    expect(overridden.edges).toEqual(source.edges);
+  });
+
+  it("does not apply a model override to unrelated node parameters", async () => {
+    const { definePattern } = await import("../../src/patterns/index.js");
+    const source = structuredClone(BUILTIN_PATTERNS[0].workflow);
+    source.inner_nodes.unshift({ id: "other", type: "Custom", params: { model: "custom-value", nested: { keep: true } } });
+    const result = patternToWorkflow(definePattern("custom", "user", source), "llm-model");
+    expect(result.inner_nodes[0].params).toEqual({ model: "custom-value", nested: { keep: true } });
+  });
+});

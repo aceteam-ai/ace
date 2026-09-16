@@ -9,6 +9,7 @@ import {
   readStdin,
   readInputFile,
   runPattern,
+  validatePatternInput,
   runBatch,
   scanInputDir,
   writeOutput,
@@ -310,6 +311,14 @@ export const runCommand = new Command("run")
         const all = listPatterns();
         console.log(chalk.dim(`Available: ${all.map((p) => p.id).join(", ")}`));
         process.exit(1);
+      }
+
+      try {
+        validatePatternInput(pattern);
+      } catch (err) {
+        output.error(err instanceof Error ? err.message : String(err));
+        process.exitCode = 1;
+        return;
       }
 
       // ── Batch mode (folder → folder) ──────────────────

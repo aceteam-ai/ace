@@ -1,0 +1,50 @@
+{
+  "name": "Create Outline",
+  "description": "Structured outline with headers and sub-points",
+  "input_node": {
+    "id": "input",
+    "type": "Input",
+    "params": {
+      "fields": {
+        "prompt": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "output_node": {
+    "id": "output",
+    "type": "Output",
+    "params": {
+      "fields": {
+        "response": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "inner_nodes": [
+    {
+      "id": "llm",
+      "type": "LLM",
+      "params": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are an expert content organizer. Create a clear, hierarchical outline from the input text.\n\nYour output MUST use this format:\n\n# [Title]\n\n## I. [First Major Section]\n   A. [Sub-point]\n      1. [Detail]\n      2. [Detail]\n   B. [Sub-point]\n\n## II. [Second Major Section]\n   A. [Sub-point]\n   B. [Sub-point]\n\n(continue as needed)\n\nGuidelines:\n- Organize content logically by theme or chronology\n- Use consistent hierarchy (Roman numerals → letters → numbers)\n- Include all important points from the source material\n- Keep outline entries concise but descriptive"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source_id": "input",
+      "source_key": "prompt",
+      "target_id": "llm",
+      "target_key": "prompt"
+    },
+    {
+      "source_id": "llm",
+      "source_key": "response",
+      "target_id": "output",
+      "target_key": "response"
+    }
+  ]
+}

@@ -110,3 +110,26 @@ describe("runCommand", () => {
     expect(commandStr).toContain("workflow");
   });
 });
+
+describe("named graph input validation", () => {
+  it("rejects required named inputs before bootstrapping Python", async () => {
+    const { existsSync, readFileSync } = await import("node:fs");
+    const { ensurePython } = await import("../../src/utils/ensure-python.js");
+    const { BUILTIN_PATTERNS } = await import("../../src/patterns/index.js");
+    const graph = structuredClone(BUILTIN_PATTERNS[0].workflow);
+    graph.input_node.params.fields.extra = { type: "string" };
+    vi.mocked(existsSync).mockImplementation((path) => String(path).endsWith("workflow.json"));
+    vi.mocked(readFileSync).mockReturnValue(JSON.stringify(graph));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const previousExitCode = process.exitCode;
+    try {
+      await runCommand.parseAsync(["node", "ace", "summarize", "Synthetic text"]);
+      expect(ensurePython).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("named workflow inputs"));
+    } finally {
+      process.exitCode = previousExitCode;
+      error.mockRestore();
+    }
+  });
+});
