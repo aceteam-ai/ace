@@ -5,6 +5,28 @@
 
 AceTeam CLI - Run AI workflows locally from your terminal.
 
+## Harness presence hooks
+
+After configuring the `aceteam` MCP server, install liveness hooks with
+`ace hooks install --harness claude-code` or `ace hooks install --harness codex`.
+User scope is the default. Add `--scope project` for one repo, or `--name`
+for a dedicated launcher. Names otherwise derive from each session's cwd.
+`ace hooks status --harness claude-code` lists bindings and checks MCP setup.
+
+The installer preserves unrelated settings and hooks, prints changed
+bindings, and reports `no changes` on a repeat run. Hooks reuse the existing
+MCP connection and contain no credentials. User input records busy; Stop
+drains pending messages before declaring idle. Claude Code additionally
+reports tool completion and observes permission and input notifications.
+These notifications need the companion blocked-state backend slice.
+
+Codex requires operator trust review before changed hooks can run. Its
+current MCP runtime does not support SessionEnd, so the configured teardown
+handler is best effort; use launcher attestation or the lease TTL. No hook
+answers a permission or trust prompt. Live transport identity and fleet
+acceptance remain verification gates for the companion backend change,
+aceteam-ai/aceteam#10469.
+
 ## Install
 
 ```bash
