@@ -18,7 +18,7 @@ export function livenessHooks(harness: Harness, machine = hostname(), name?: str
     ...(harness === "codex" ? { harness_session_id: "${session_id}" } : {}),
     ...(name ? { name } : {}),
   };
-  const handler = (tool: string, input: JsonObject, timeout = 1.5): Handler => ({ type: "mcp_tool", server: "aceteam", tool, input, timeout });
+  const handler = (tool: string, input: JsonObject, timeout = 1.5): Handler => ({ type: "mcp_tool", server: "aceteam", tool, input, timeout: harness === "codex" ? Math.ceil(timeout) : timeout });
   const group = (hook: Handler, matcher?: string): Group => ({ ...(matcher ? { matcher } : {}), hooks: [hook] });
   const hooks: Record<string, Group[]> = {
     SessionStart: [group(handler("session_heartbeat", registration, 3))],

@@ -19,6 +19,7 @@ describe("liveness hook installation", () => {
     expect(config.hooks.UserPromptSubmit[0].hooks[0].input.presence_interval_s).toBe(300);
     expect(config.hooks.UserPromptSubmit[0].hooks[0].input.name).toBeUndefined();
     expect(config.hooks.Stop[0].hooks[0].input).toMatchObject({ drain: true, format: "hook", idle_on_empty: true });
+    if (harness === "codex") expect(Number.isInteger(config.hooks.SessionEnd[0].hooks[0].timeout)).toBe(true);
     expect(bytes.toLowerCase()).not.toMatch(/authorization|bearer|api_key|api-key|token/);
     expect(await installHooks(harness, "user", undefined, home, home)).toEqual([`${path}: no changes`]);
     expect(await readFile(path, "utf8")).toBe(bytes);
