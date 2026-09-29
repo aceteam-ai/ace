@@ -23,11 +23,11 @@ export function livenessHooks(harness: Harness, machine = hostname(), name?: str
   const hooks: Record<string, Group[]> = {
     SessionStart: [group(handler("session_heartbeat", registration, 3))],
     UserPromptSubmit: [group(handler("session_heartbeat", { ...registration, state: "busy" }, 3))],
+    PostToolUse: [group(handler("session_heartbeat", { state: "busy" }))],
     Stop: [group(handler("session_inbox", { drain: true, format: "hook", idle_on_empty: true, ...(harness === "codex" ? { harness_session_id: "${session_id}" } : {}) }, 10))],
     SessionEnd: [group(handler("session_unregister", {}))],
   };
   if (harness === "claude-code") {
-    hooks.PostToolUse = [group(handler("session_heartbeat", { state: "busy" }))];
     hooks.Notification = [
       group(handler("session_heartbeat", { state: "blocked", blocked_on: "human:permission", reason: "Waiting for operator permission" }), "permission_prompt"),
       group(handler("session_heartbeat", { state: "blocked", blocked_on: "human:input", reason: "Waiting for operator input" }), "elicitation_dialog"),

@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { hooksPath, installHooks, hooksStatus, livenessHooks, mergeHooks } from "../../src/commands/hooks.js";
 
 const roots: string[] = [];
@@ -18,6 +20,7 @@ describe("liveness hook installation", () => {
     const config = JSON.parse(bytes);
     expect(config.hooks.UserPromptSubmit[0].hooks[0].input.presence_interval_s).toBe(300);
     expect(config.hooks.UserPromptSubmit[0].hooks[0].input.name).toBeUndefined();
+    expect(config.hooks.PostToolUse).toEqual([{ hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "busy" }, timeout: harness === "codex" ? 2 : 1.5 }] }]);
     expect(config.hooks.Stop[0].hooks[0].input).toMatchObject({ drain: true, format: "hook", idle_on_empty: true });
     if (harness === "codex") expect(Number.isInteger(config.hooks.SessionEnd[0].hooks[0].timeout)).toBe(true);
     expect(bytes.toLowerCase()).not.toMatch(/authorization|bearer|api_key|api-key|token/);
@@ -49,6 +52,22 @@ describe("liveness hook installation", () => {
     await expect(readFile(hooksPath("claude-code", "user", home, project))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("upgrades a Codex install missing completion presence without replacing unrelated hooks", async () => {
+    const home = await root();
+    const path = hooksPath("codex", "user", home, home);
+    const previous = livenessHooks("codex", "machine");
+    delete previous.hooks.PostToolUse;
+    const observer = { type: "command", command: "echo custom" };
+    previous.hooks.PostToolUse = [{ matcher: "Bash", hooks: [observer] }];
+    await mkdir(join(home, ".codex"));
+    await writeFile(path, JSON.stringify(previous));
+    expect((await installHooks("codex", "user", undefined, home, home)).some(line => line.endsWith("add PostToolUse session_heartbeat"))).toBe(true);
+    const installed = JSON.parse(await readFile(path, "utf8"));
+    expect(installed.hooks.PostToolUse).toContainEqual({ matcher: "Bash", hooks: [observer] });
+    expect(installed.hooks.PostToolUse.filter((group: { matcher?: string }) => !group.matcher)).toEqual(livenessHooks("codex").hooks.PostToolUse);
+    expect(await installHooks("codex", "user", undefined, home, home)).toEqual([`${path}: no changes`]);
+  });
+
   it("refuses malformed config without overwriting it", async () => {
     const home = await root(); await mkdir(join(home, ".codex"));
     const path = hooksPath("codex", "user", home, home);
@@ -66,6 +85,7 @@ describe("liveness hook installation", () => {
     const output = (await hooksStatus("codex", "user", home, home)).join("\n");
     expect(output).toContain("aceteam MCP server: configured");
     expect(output).toContain("Stop: session_inbox");
+    expect(output).toContain("PostToolUse: session_heartbeat");
     expect(output).not.toContain("PRIVATE_VALUE");
   });
 
@@ -75,4 +95,18 @@ describe("liveness hook installation", () => {
     expect(JSON.stringify(config)).not.toContain("harness_session_id");
     expect(config.hooks.Notification.map(group => group.matcher)).toEqual(["permission_prompt", "elicitation_dialog", "idle_prompt"]);
   });
+});
+
+describe("installed Codex parser", () => {
+  it.skipIf(!(process.env.PATH ?? "").split(":").some(path => existsSync(join(path, "codex"))))("accepts completion hooks in an isolated credential-free config", async () => {
+    const home = await root();
+    await installHooks("codex", "user", undefined, home, home);
+    await writeFile(join(home, ".codex", "config.toml"), 'model = "parser-only"\nmodel_provider = "local_parser"\n[model_providers.local_parser]\nname = "Parser only"\nbase_url = "http://127.0.0.1:9/v1"\nwire_api = "responses"\n');
+    const result = spawnSync("codex", ["exec", "--skip-git-repo-check", "--json", "Parser check only"], {
+      cwd: home, env: { PATH: process.env.PATH, HOME: home, CODEX_HOME: join(home, ".codex") }, encoding: "utf8", timeout: 4000, stdio: ["ignore", "pipe", "pipe"],
+    });
+    expect(result.stdout, result.stderr).toContain('"type":"thread.started"');
+    expect(result.stderr).not.toMatch(/Error loading hooks|invalid type|PostToolUse.*not supported/);
+    expect(result.stdout, result.stderr).toContain('"type":"turn.started"');
+  }, 10000);
 });

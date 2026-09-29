@@ -16,8 +16,10 @@ for a dedicated launcher. Names otherwise derive from each session's cwd.
 The installer preserves unrelated settings and hooks, prints changed
 bindings, and reports `no changes` on a repeat run. Hooks reuse the existing
 MCP connection and contain no credentials. User input records busy; Stop
-drains pending messages before declaring idle. Claude Code additionally
-reports tool completion and observes permission and input notifications.
+drains pending messages before declaring idle. Both harnesses refresh busy
+presence after supported tool completions, including local tools. MCP hooks
+reuse the connection without triggering other hooks. Claude Code additionally
+observes permission and input notifications.
 These notifications need the companion blocked-state backend slice.
 
 Codex requires operator trust review before changed hooks can run. Its
