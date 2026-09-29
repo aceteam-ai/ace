@@ -22,6 +22,14 @@ reuse the connection without triggering other hooks. Claude Code additionally
 observes permission and input notifications.
 These notifications need the companion blocked-state backend slice.
 
+Claude Code also declares `human:input` before `AskUserQuestion`. Its existing
+successful-tool completion heartbeat clears that declaration after an answer,
+including successful MCP tools that requested elicitation. Stop's idle signal
+also clears it. These observers never supply an answer or change a permission
+decision. The blocked-state backend is aceteam-ai/aceteam#10479, part of
+aceteam-ai/aceteam#10470. Actual question and elicitation event sequences still
+require operator-driven live verification. Codex remains declaration-only.
+
 Codex requires operator trust review before changed hooks can run. Its
 current MCP runtime does not support SessionEnd, so the configured teardown
 handler is best effort; use launcher attestation or the lease TTL. No hook
