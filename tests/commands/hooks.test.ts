@@ -137,6 +137,45 @@ describe("built CLI diagnostic boundary", () => {
       expect(result.stdout).toContain(expected);
     }
   });
+  it.each(["claude-code", "codex"] as const)("installs the S2 observer with repaired S1 completion mapping through the built %s CLI", async harness => {
+    const home = await root();
+    const cliNode = process.env.ACE_TEST_NODE ?? process.execPath;
+    const configPath = hooksPath(harness, "user", home, home);
+    const invoke = (operation: string) => spawnSync(cliNode, [cli, "hooks", operation, "--harness", harness], {
+      cwd: home, env: { PATH: process.env.PATH, HOME: home, NO_COLOR: "1" }, encoding: "utf8", timeout: 10000,
+    });
+    const installed = invoke("install");
+    expect(installed.status, installed.stderr).toBe(0);
+    expect(installed.stderr).toBe("");
+    const bytes = await readFile(configPath, "utf8");
+    const config = JSON.parse(bytes);
+    expect(config.hooks.PostToolUse).toEqual([{
+      hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "busy" }, timeout: harness === "codex" ? 2 : 1.5 }],
+    }]);
+    const status = invoke("status");
+    expect(status.status, status.stderr).toBe(0);
+    expect(status.stderr).toBe("");
+    expect(status.stdout).toContain("PostToolUse: session_heartbeat");
+    if (harness === "claude-code") {
+      expect(config.hooks.PreToolUse).toEqual([{
+        matcher: "AskUserQuestion", hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "blocked", blocked_on: "human:input", reason: "Waiting for an operator answer" }, timeout: 1.5 }],
+      }]);
+      expect(status.stdout).toContain("PreToolUse (AskUserQuestion): session_heartbeat");
+      expect(config.hooks.Notification.map((group: { matcher: string }) => group.matcher)).toEqual(["permission_prompt", "elicitation_dialog", "idle_prompt"]);
+    } else {
+      expect(config.hooks.PreToolUse).toBeUndefined();
+      expect(config.hooks.Notification).toBeUndefined();
+    }
+    expect(config.hooks.PermissionRequest).toBeUndefined();
+    expect(config.hooks.Elicitation).toBeUndefined();
+    expect(config.hooks.ElicitationResult).toBeUndefined();
+    expect(JSON.stringify(config)).not.toMatch(/permissionDecision|updatedInput|hookSpecificOutput|Authorization|Bearer/);
+    const repeated = invoke("install");
+    expect(repeated.status, repeated.stderr).toBe(0);
+    expect(repeated.stdout).toContain("no changes");
+    expect(await readFile(configPath, "utf8")).toBe(bytes);
+    expect(await readdir(join(home, harness === "codex" ? ".codex" : ".claude"))).toEqual([harness === "codex" ? "hooks.json" : "settings.json"]);
+  });
   const malformed = [
     marker,
     `{ "hooks": ${JSON.stringify(marker)}`,
