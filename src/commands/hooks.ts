@@ -14,8 +14,8 @@ type HookConfig = JsonObject & { hooks: Record<string, Group[]> };
 
 class HookConfigError extends Error {}
 
-const knownEvents = new Set(["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd", "Notification"]);
-const knownMatchers = new Set(["permission_prompt", "elicitation_dialog", "idle_prompt"]);
+const knownEvents = new Set(["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd", "Notification"]);
+const knownMatchers = new Set(["AskUserQuestion", "permission_prompt", "elicitation_dialog", "idle_prompt"]);
 const knownTools = new Set(["session_heartbeat", "session_inbox", "session_unregister", "session_register"]);
 
 function bindingLabel(event: string, group: Group, hook: JsonObject): string {
@@ -41,6 +41,7 @@ export function livenessHooks(harness: Harness, machine = hostname(), name?: str
     SessionEnd: [group(handler("session_unregister", {}))],
   };
   if (harness === "claude-code") {
+    hooks.PreToolUse = [group(handler("session_heartbeat", { state: "blocked", blocked_on: "human:input", reason: "Waiting for an operator answer" }), "AskUserQuestion")];
     hooks.Notification = [
       group(handler("session_heartbeat", { state: "blocked", blocked_on: "human:permission", reason: "Waiting for operator permission" }), "permission_prompt"),
       group(handler("session_heartbeat", { state: "blocked", blocked_on: "human:input", reason: "Waiting for operator input" }), "elicitation_dialog"),
