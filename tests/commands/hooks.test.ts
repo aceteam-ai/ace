@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from "node:fs/promises";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { mkdtemp, mkdir, writeFile, readFile, rm, stat, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { hooksPath, installHooks, hooksStatus, livenessHooks, mergeHooks } from "../../src/commands/hooks.js";
@@ -109,4 +109,86 @@ describe("installed Codex parser", () => {
     expect(result.stderr).not.toMatch(/Error loading hooks|invalid type|PostToolUse.*not supported/);
     expect(result.stdout, result.stderr).toContain('"type":"turn.started"');
   }, 10000);
+});
+
+describe("built CLI diagnostic boundary", () => {
+  const marker = "SYNTHETIC_PRIVATE_HOOK_VALUE";
+  const hostile = `${marker}\u001b[31m\n${"x".repeat(5000)}`;
+  const cli = resolve("dist/index.js");
+  beforeAll(() => {
+    const built = spawnSync("pnpm", ["build"], { encoding: "utf8", timeout: 60000 });
+    expect(built.error).toBeUndefined();
+    expect(built.status, built.stderr).toBe(0);
+  }, 70000);
+  // The existing interactive dependency requires Node 20. Hook commands do not.
+  it.skipIf(Number(process.versions.node.split(".")[0]) < 20)("preserves top-level and unrelated command help", async () => {
+    const home = await root();
+    for (const [args, expected] of [
+      [["--help"], "workflow"],
+      [["workflow", "--help"], "validate"],
+      [["run", "--help"], "--input"],
+    ] as const) {
+      const result = spawnSync(process.execPath, [cli, ...args], {
+        cwd: home, env: { PATH: process.env.PATH, HOME: home, NO_COLOR: "1" }, encoding: "utf8", timeout: 10000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain(expected);
+    }
+  });
+  const malformed = [
+    marker,
+    `{ "hooks": ${JSON.stringify(marker)}`,
+    JSON.stringify({ hooks: { [hostile]: null } }),
+    JSON.stringify({ hooks: { Stop: [{ matcher: { [marker]: true }, hooks: [] }] } }),
+    JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "mcp_tool", server: "aceteam", tool: { [marker]: true } }] }] } }),
+    JSON.stringify({ hooks: { Stop: [{ hooks: [hostile] }] } }),
+  ];
+  it.each(["claude-code", "codex"] as const)("rejects malformed %s config with bounded stderr, exit 1 and no writes", async harness => {
+    for (const operation of ["install", "status"]) for (const bytes of malformed) {
+      const home = await root();
+      const path = hooksPath(harness, "user", home, home);
+      await mkdir(join(home, harness === "codex" ? ".codex" : ".claude"));
+      await writeFile(path, bytes, { mode: 0o640 });
+      const result = spawnSync(process.env.ACE_TEST_NODE ?? process.execPath, [cli, "hooks", operation, "--harness", harness], {
+        cwd: home, env: { PATH: process.env.PATH, HOME: home, NO_COLOR: "1" }, encoding: "utf8", timeout: 10000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toMatch(/^(Hook configuration is not valid JSON; the file was not changed\.|Invalid hook groups; the file was not changed\.)\n$/);
+      expect(result.stderr.length).toBeLessThan(160);
+      expect(result.stderr).not.toContain(marker);
+      expect(result.stderr).not.toContain("\u001b");
+      expect(await readFile(path, "utf8")).toBe(bytes);
+      expect((await stat(path)).mode & 0o777).toBe(0o640);
+      expect(await readdir(join(home, harness === "codex" ? ".codex" : ".claude"))).toEqual([harness === "codex" ? "hooks.json" : "settings.json"]);
+    }
+  }, 60000);
+
+  it.each(["claude-code", "codex"] as const)("preserves custom %s bindings without displaying untrusted labels", async harness => {
+    const home = await root();
+    const path = hooksPath(harness, "user", home, home);
+    await mkdir(join(home, harness === "codex" ? ".codex" : ".claude"));
+    const config = { privateSetting: marker, hooks: {
+      [hostile]: [{ matcher: hostile, hooks: [{ type: "mcp_tool", server: "aceteam", tool: hostile }] }],
+    } };
+    await writeFile(path, JSON.stringify(config));
+    for (const operation of ["status", "install", "status", "install"]) {
+      const result = spawnSync(process.env.ACE_TEST_NODE ?? process.execPath, [cli, "hooks", operation, "--harness", harness], {
+        cwd: home, env: { PATH: process.env.PATH, HOME: home, NO_COLOR: "1" }, encoding: "utf8", timeout: 10000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).not.toContain(marker);
+      expect(result.stdout).not.toContain("\u001b");
+      expect(result.stdout.length).toBeLessThan(1800);
+      if (operation === "status") expect(result.stdout).toContain("<custom event> (<custom matcher>): <custom tool>");
+      const stored = JSON.parse(await readFile(path, "utf8"));
+      expect(stored.privateSetting).toBe(marker);
+      expect(stored.hooks[hostile]).toEqual(config.hooks[hostile]);
+    }
+  });
 });

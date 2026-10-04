@@ -12,6 +12,19 @@ type Handler = JsonObject & { type: string; server: string; tool: string; input:
 type Group = JsonObject & { matcher?: string; hooks: JsonObject[] };
 type HookConfig = JsonObject & { hooks: Record<string, Group[]> };
 
+class HookConfigError extends Error {}
+
+const knownEvents = new Set(["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd", "Notification"]);
+const knownMatchers = new Set(["permission_prompt", "elicitation_dialog", "idle_prompt"]);
+const knownTools = new Set(["session_heartbeat", "session_inbox", "session_unregister", "session_register"]);
+
+function bindingLabel(event: string, group: Group, hook: JsonObject): string {
+  const eventLabel = knownEvents.has(event) ? event : "<custom event>";
+  const matcherLabel = group.matcher ? ` (${knownMatchers.has(group.matcher) ? group.matcher : "<custom matcher>"})` : "";
+  const toolLabel = typeof hook.tool === "string" && knownTools.has(hook.tool) ? hook.tool : "<custom tool>";
+  return `${eventLabel}${matcherLabel}: ${toolLabel}`;
+}
+
 export function livenessHooks(harness: Harness, machine = hostname(), name?: string): HookConfig {
   const registration: JsonObject = {
     harness, machine, cwd: "${cwd}", permission_mode: "${permission_mode}", presence_interval_s: 300,
@@ -42,12 +55,14 @@ function object(value: unknown): value is JsonObject {
 }
 
 function parseConfig(text: string): HookConfig {
-  const config: unknown = JSON.parse(text);
-  if (!object(config) || (config.hooks !== undefined && !object(config.hooks))) throw new Error("Hook configuration must be a JSON object with an optional hooks object.");
+  let config: unknown;
+  try { config = JSON.parse(text); }
+  catch { throw new HookConfigError("Hook configuration is not valid JSON; the file was not changed."); }
+  if (!object(config) || (config.hooks !== undefined && !object(config.hooks))) throw new HookConfigError("Hook configuration must be a JSON object with an optional hooks object.");
   const hooks = (config.hooks ?? {}) as Record<string, unknown>;
-  for (const [event, groups] of Object.entries(hooks)) {
-    if (!Array.isArray(groups) || groups.some(group => !object(group) || !Array.isArray(group.hooks) || group.hooks.some(hook => !object(hook)))) {
-      throw new Error(`Invalid hook groups for ${event}; the file was not changed.`);
+  for (const groups of Object.values(hooks)) {
+    if (!Array.isArray(groups) || groups.some(group => !object(group) || (group.matcher !== undefined && typeof group.matcher !== "string") || !Array.isArray(group.hooks) || group.hooks.some(hook => !object(hook) || (hook.type === "mcp_tool" && hook.server === "aceteam" && typeof hook.tool !== "string")))) {
+      throw new HookConfigError("Invalid hook groups; the file was not changed.");
     }
   }
   return { ...config, hooks: hooks as Record<string, Group[]> };
@@ -98,7 +113,7 @@ async function readConfig(path: string): Promise<{ config: HookConfig; text: str
 }
 
 export async function installHooks(harness: Harness, scope: Scope, name?: string, home?: string, cwd?: string): Promise<string[]> {
-  if (name && !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(name)) throw new Error("Name must be lowercase, start with a letter or digit, and contain at most 64 letters, digits, periods, underscores, or hyphens.");
+  if (name && !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(name)) throw new HookConfigError("Name must be lowercase, start with a letter or digit, and contain at most 64 letters, digits, periods, underscores, or hyphens.");
   const path = hooksPath(harness, scope, home, cwd);
   const before = await readConfig(path);
   const { config, changes } = mergeHooks(before.config, livenessHooks(harness, hostname(), name));
@@ -109,7 +124,7 @@ export async function installHooks(harness: Harness, scope: Scope, name?: string
     await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { flag: "wx", mode: before.mode });
     // Avoid overwriting a concurrent editor's change.
     const current = await readConfig(path);
-    if (current.text !== before.text) throw new Error("Hook configuration changed during installation; retry after the other writer finishes.");
+    if (current.text !== before.text) throw new HookConfigError("Hook configuration changed during installation; retry after the other writer finishes.");
     await rename(temporary, path);
   } finally { await unlink(temporary).catch(() => {}); }
   return [`${path}:`, ...changes.map(change => `  + ${change}`)];
@@ -118,7 +133,7 @@ export async function installHooks(harness: Harness, scope: Scope, name?: string
 export async function hooksStatus(harness: Harness, scope: Scope, home = homedir(), cwd = process.cwd()): Promise<string[]> {
   const path = hooksPath(harness, scope, home, cwd);
   const { config } = await readConfig(path);
-  const events = Object.entries(config.hooks).flatMap(([event, groups]) => groups.flatMap(group => group.hooks.filter(hook => hook.type === "mcp_tool" && hook.server === "aceteam").map(hook => `${event}${group.matcher ? ` (${group.matcher})` : ""}: ${String(hook.tool)}`)));
+  const events = Object.entries(config.hooks).flatMap(([event, groups]) => groups.flatMap(group => group.hooks.filter(hook => hook.type === "mcp_tool" && hook.server === "aceteam").map(hook => bindingLabel(event, group, hook))));
   let configured = false;
   if (harness === "codex") {
     for (const base of [home, cwd]) {
@@ -159,6 +174,6 @@ for (const operation of ["install", "status"]) {
       const lines = operation === "install" ? await installHooks(options.harness, options.scope, options.name) : await hooksStatus(options.harness, options.scope);
       process.stdout.write(`${lines.join("\n")}\n`);
       if (operation === "install" && options.harness === "codex") process.stdout.write("Review and trust the installed hooks in Codex. MCP SessionEnd hooks are currently unsupported.\n");
-    } catch (error) { command.error((error as Error).message); }
+    } catch (error) { command.error(error instanceof HookConfigError ? error.message : "Unable to read or install hook configuration."); }
   });
 }
