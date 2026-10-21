@@ -2,7 +2,7 @@ import { Command } from "commander";
 import { select, password } from "@inquirer/prompts";
 import chalk from "chalk";
 import ora from "ora";
-import { loadConfig, saveConfig } from "../utils/config.js";
+import { loadConfig, saveConfig, type ControlPlaneSession } from "../utils/config.js";
 import { detectOllama } from "../utils/provider-detect.js";
 import * as output from "../utils/output.js";
 import { CliError, ControlPlaneClient, DEFAULT_MCP_URL } from "../utils/control-plane.js";
@@ -59,6 +59,10 @@ async function loginAceTeam(flags: OutputFlags, mcpUrl?: string): Promise<void> 
     (url) => console.error("Open this URL to authorize Ace: " + url),
   );
   const identity = await new ControlPlaneClient(session).identity();
+  if (typeof identity.organization_id !== "string") {
+    throw new CliError(4, "The control plane returned no active organization.");
+  }
+  session.active_org_id = identity.organization_id;
   config.control_plane = session;
   saveConfig(config);
   printValue(
@@ -154,12 +158,16 @@ loginCommand.action(async (options: { apiKey?: string; apiKeyEnv?: string; mcpUr
     }
     if (!apiKey?.trim()) throw new CliError(2, "API key is empty.");
     const config = loadConfig();
-    const session = {
-      kind: "api_key" as const,
+    const session: ControlPlaneSession = {
+      kind: "api_key",
       mcp_url: options.mcpUrl || config.control_plane?.mcp_url || DEFAULT_MCP_URL,
       access_token: apiKey.trim(),
     };
     const identity = await new ControlPlaneClient(session).identity();
+    if (typeof identity.organization_id !== "string") {
+      throw new CliError(4, "The control plane returned no active organization.");
+    }
+    session.active_org_id = identity.organization_id;
     config.control_plane = session;
     config.fabric_url = config.fabric_url || "https://app.aceteam.ai";
     config.fabric_api_key = session.access_token;

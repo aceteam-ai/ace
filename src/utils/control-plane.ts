@@ -280,7 +280,7 @@ export class ControlPlaneClient {
     const selected = this.session.active_org_id;
     if (selected && identity.organization_id !== selected) {
       if (this.session.kind !== "oauth") {
-        throw new CliError(3, "Org switching requires browser login with multi-org consent.");
+        throw new CliError(3, "API-key organization changed. Run ace login again.");
       }
       await this.callTool("switch_active_org", { organization_id: selected });
       identity = await this.identity();

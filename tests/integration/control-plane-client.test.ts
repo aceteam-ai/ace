@@ -119,6 +119,24 @@ describe("control-plane MCP client", () => {
     await expect(client.callTool("forge_pr_list")).rejects.toMatchObject({ exitCode: 4, message: "denied" });
   });
 
+  it("fails closed if a single-org API key acts in a different org than its saved context", async () => {
+    const responses = [
+      new Response(JSON.stringify({ result: { protocolVersion: "2025-06-18" } }), { status: 200, headers: { "Content-Type": "application/json" } }),
+      new Response(null, { status: 202 }),
+      new Response(JSON.stringify({ result: textResult({ organization_id: "org-b" }) }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    ];
+    const fakeFetch = vi.fn(async () => responses.shift()!);
+    const client = new ControlPlaneClient(
+      { kind: "api_key", mcp_url: "https://aceteam.ai/mcp", access_token: "test", active_org_id: "org-a" },
+      fakeFetch as unknown as typeof fetch,
+    );
+    await expect(client.ensureSelectedOrg()).rejects.toMatchObject({
+      exitCode: 3,
+      message: "API-key organization changed. Run ace login again.",
+    });
+    expect(fakeFetch).toHaveBeenCalledTimes(3);
+  });
+
   it("refreshes OAuth credentials and restores the persisted org context", async () => {
     let activeOrg = "org-a";
     const methods: string[] = [];
