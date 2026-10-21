@@ -144,17 +144,15 @@ export const loginCommand = new Command("login")
 loginCommand.action(async (options: { apiKey?: string; apiKeyEnv?: string; mcpUrl?: string }) => {
   const flags = outputFlags(loginCommand);
   await runCli(async () => {
-    if (options.apiKey && options.apiKeyEnv) {
+    if (options.apiKey !== undefined && options.apiKeyEnv !== undefined) {
       throw new CliError(2, "Choose either --api-key or --api-key-env.");
     }
     const apiKey = options.apiKeyEnv ? process.env[options.apiKeyEnv] : options.apiKey;
-    if (options.apiKeyEnv && !apiKey) {
-      throw new CliError(2, "API key environment variable is empty.");
-    }
-    if (!apiKey) {
+    if (options.apiKeyEnv === undefined && options.apiKey === undefined) {
       await loginAceTeam(flags, options.mcpUrl);
       return;
     }
+    if (!apiKey?.trim()) throw new CliError(2, "API key is empty.");
     const config = loadConfig();
     const session = {
       kind: "api_key" as const,
@@ -189,6 +187,6 @@ logoutCommand.action(async () => {
     }
     delete config.control_plane;
     saveConfig(config);
-    printValue({ authenticated: false }, flags, () => "Logged out of AceTeam.");
+    printValue({ authenticated: false }, flags, () => "Saved AceTeam session removed.");
   }, flags);
 });

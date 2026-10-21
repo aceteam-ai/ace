@@ -33,7 +33,7 @@ async function jsonPost(
 async function listen(server: Server): Promise<number> {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
+    server.listen(0, "localhost", resolve);
   });
   return (server.address() as AddressInfo).port;
 }

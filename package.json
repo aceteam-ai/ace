@@ -1,7 +1,7 @@
 {
   "name": "@aceteam/ace",
   "version": "0.3.0",
-  "description": "AceTeam CLI - Run AI workflows locally",
+  "description": "AceTeam control-plane CLI and local workflow runner",
   "type": "module",
   "bin": {
     "ace": "./dist/index.js"

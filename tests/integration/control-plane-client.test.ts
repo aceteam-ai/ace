@@ -118,6 +118,61 @@ describe("control-plane MCP client", () => {
     );
     await expect(client.callTool("forge_pr_list")).rejects.toMatchObject({ exitCode: 4, message: "denied" });
   });
+
+  it("refreshes OAuth credentials and restores the persisted org context", async () => {
+    let activeOrg = "org-a";
+    const methods: string[] = [];
+    const persisted = vi.fn();
+    const fakeFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/api/oauth/token")) {
+        return new Response(JSON.stringify({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+          expires_in: 3600,
+        }), { status: 200 });
+      }
+      const payload = JSON.parse(String(init?.body)) as { method: string; id?: number; params?: { name?: string; arguments?: { organization_id?: string } } };
+      methods.push(payload.method + (payload.params?.name ? ":" + payload.params.name : ""));
+      if (payload.method === "notifications/initialized") return new Response(null, { status: 202 });
+      let result: unknown = { protocolVersion: "2025-06-18" };
+      if (payload.params?.name === "whoami") result = textResult({ organization_id: activeOrg });
+      if (payload.params?.name === "switch_active_org") {
+        activeOrg = String(payload.params.arguments?.organization_id);
+        result = textResult({ organization_id: activeOrg });
+      }
+      return new Response(JSON.stringify({ id: payload.id, result }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    const client = new ControlPlaneClient(
+      {
+        kind: "oauth",
+        mcp_url: "https://aceteam.ai/mcp",
+        access_token: "expired",
+        refresh_token: "old-refresh",
+        client_id: "client-1",
+        expires_at: Date.now() - 1000,
+        active_org_id: "org-b",
+      },
+      fakeFetch as unknown as typeof fetch,
+      persisted,
+    );
+
+    expect((await client.ensureSelectedOrg()).organization_id).toBe("org-b");
+    expect(persisted).toHaveBeenCalledWith(expect.objectContaining({
+      access_token: "new-access",
+      refresh_token: "new-refresh",
+      active_org_id: "org-b",
+    }));
+    expect(methods).toEqual([
+      "initialize",
+      "notifications/initialized",
+      "tools/call:whoami",
+      "tools/call:switch_active_org",
+      "tools/call:whoami",
+    ]);
+  });
 });
 
 describe("browser OAuth and CLI argument contract", () => {
@@ -143,7 +198,6 @@ describe("browser OAuth and CLI argument contract", () => {
         authorizationUrl = url;
         const authorize = new URL(url);
         const callback = new URL(authorize.searchParams.get("redirect_uri")!);
-        callback.hostname = "127.0.0.1";
         callback.searchParams.set("state", authorize.searchParams.get("state")!);
         callback.searchParams.set("code", "code-1");
         void fetch(callback);
@@ -155,6 +209,24 @@ describe("browser OAuth and CLI argument contract", () => {
     expect(new URL(authorizationUrl).searchParams.get("code_challenge_method")).toBe("S256");
     expect(tokenBody).toContain("code_verifier=");
     expect(tokenBody).toContain("resource=https%3A%2F%2Faceteam.ai%2Fmcp");
+  });
+
+  it("rejects a browser callback with the wrong OAuth state", async () => {
+    const fakeFetch = vi.fn(async () =>
+      new Response(JSON.stringify({ client_id: "client-1" }), { status: 201 }),
+    );
+    await expect(browserLogin(
+      "https://aceteam.ai/mcp",
+      (url) => {
+        const callback = new URL(new URL(url).searchParams.get("redirect_uri")!);
+        callback.searchParams.set("state", "wrong");
+        callback.searchParams.set("code", "code-1");
+        void fetch(callback);
+      },
+      fakeFetch as unknown as typeof fetch,
+      5000,
+    )).rejects.toMatchObject({ exitCode: 3, message: "OAuth state mismatch. Run ace login again." });
+    expect(fakeFetch).toHaveBeenCalledTimes(1);
   });
 
   it("parses JSON and key=value arguments and gives errors stable exit codes", async () => {

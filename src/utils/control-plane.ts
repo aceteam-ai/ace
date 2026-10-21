@@ -193,6 +193,7 @@ export class ControlPlaneClient {
     }
     if (response.status === 401 && retry && this.session.kind === "oauth") {
       await this.refreshIfNeeded(true);
+      if (payload.method !== "initialize") await this.connect();
       return this.post(payload, false);
     }
     if (response.status === 401 || response.status === 403) {

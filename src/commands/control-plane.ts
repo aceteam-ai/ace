@@ -148,7 +148,7 @@ mcpCommand.action(async (name: string | undefined) => {
   const flags = outputFlags(mcpCommand, options.json !== undefined);
   await runCli(async () => {
     const client = configuredClient();
-    await client.ensureSelectedOrg();
+    const identity = await client.ensureSelectedOrg();
     if (options.list !== undefined) {
       const query = typeof options.list === "string" ? options.list.trim() : "";
       const tools = query
@@ -168,6 +168,11 @@ mcpCommand.action(async (name: string | undefined) => {
     if (!name) throw new CliError(2, "Supply a tool name, --list, or --schema.");
     const tool = await client.getTool(name);
     const args = parseToolArgs(options.json, options.arg);
+    const properties = tool.inputSchema.properties;
+    if (properties && typeof properties === "object" && !Array.isArray(properties) &&
+        "expected_org_id" in properties && !Object.hasOwn(args, "expected_org_id")) {
+      args.expected_org_id = identity.organization_id;
+    }
     validateToolArgs(tool, args);
     const result = unwrapToolResult(await client.callTool(name, args));
     printValue(result, flags);

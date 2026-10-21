@@ -7,7 +7,11 @@ const fakeClient = vi.hoisted(() => ({
     inputSchema: {
       type: "object",
       required: ["owner", "repo"],
-      properties: { owner: { type: "string" }, repo: { type: "string" } },
+      properties: {
+        owner: { type: "string" },
+        repo: { type: "string" },
+        expected_org_id: { type: "string" },
+      },
     },
   })),
   callTool: vi.fn(async () => ({
@@ -42,6 +46,7 @@ it("routes ace mcp --json object to tool args and emits machine JSON", async () 
   expect(fakeClient.callTool).toHaveBeenCalledWith("forge_pr_list", {
     owner: "aceteam-ai",
     repo: "ace",
+    expected_org_id: "org-a",
   });
   expect(stdout).toHaveBeenCalledWith('{"pulls":[1]}');
   expect(process.exitCode || 0).toBe(0);
