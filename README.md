@@ -73,6 +73,18 @@ with status 2, authentication failures with 3, and control-plane failures
 with 4. The config file is restricted to its owner. Set `ACE_CONFIG_DIR`
 to use a different config directory.
 
+Shell completion is available for Bash, Zsh, and Fish. Add the matching line
+to your shell setup, or save the Fish script to its completion directory:
+
+```bash
+eval "$(ace completion bash)" # ~/.bashrc
+eval "$(ace completion zsh)"  # ~/.zshrc
+ace completion fish > ~/.config/fish/completions/ace.fish
+```
+
+Completion suggests commands and flags from the installed CLI. Use
+`ace mcp --list` to discover live tool names.
+
 ## How It Works
 
 ```
