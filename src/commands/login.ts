@@ -1,10 +1,13 @@
 import { Command } from "commander";
-import { select, input, password } from "@inquirer/prompts";
+import { select, password } from "@inquirer/prompts";
 import chalk from "chalk";
 import ora from "ora";
 import { loadConfig, saveConfig } from "../utils/config.js";
 import { detectOllama } from "../utils/provider-detect.js";
 import * as output from "../utils/output.js";
+import { CliError, ControlPlaneClient, DEFAULT_MCP_URL } from "../utils/control-plane.js";
+import { browserLogin } from "../utils/oauth.js";
+import { outputFlags, printValue, runCli, type OutputFlags } from "../utils/cli-output.js";
 
 /**
  * Interactive login/provider configuration flow.
@@ -35,7 +38,7 @@ export async function runLoginFlow(): Promise<void> {
 
   switch (choice) {
     case "aceteam":
-      await loginAceTeam();
+      await loginAceTeam({ json: false, quiet: false });
       break;
     case "own-key":
       await loginOwnKey();
@@ -49,39 +52,20 @@ export async function runLoginFlow(): Promise<void> {
   }
 }
 
-async function loginAceTeam(): Promise<void> {
-  console.log(
-    chalk.dim("\n  Get your API key from https://app.aceteam.ai\n")
-  );
-
-  const apiKey = await password({
-    message: "AceTeam API key:",
-    validate: (v) => (v.trim() ? true : "API key is required"),
-  });
-
+async function loginAceTeam(flags: OutputFlags, mcpUrl?: string): Promise<void> {
   const config = loadConfig();
-  const url = config.fabric_url || "https://app.aceteam.ai";
-
-  const spinner = ora("Verifying connection...").start();
-  try {
-    const { FabricClient } = await import("../utils/fabric.js");
-    const client = new FabricClient(url, apiKey.trim());
-    await client.status();
-    spinner.succeed("Connected to AceTeam Cloud");
-
-    config.fabric_url = url;
-    config.fabric_api_key = apiKey.trim();
-    saveConfig(config);
-    output.success("Credentials saved");
-  } catch {
-    spinner.fail("Connection failed");
-    output.warn(
-      "Could not verify the key. Saving it anyway — you can retry with `ace login`."
-    );
-    config.fabric_url = url;
-    config.fabric_api_key = apiKey.trim();
-    saveConfig(config);
-  }
+  const session = await browserLogin(
+    mcpUrl || config.control_plane?.mcp_url || DEFAULT_MCP_URL,
+    (url) => console.error("Open this URL to authorize Ace: " + url),
+  );
+  const identity = await new ControlPlaneClient(session).identity();
+  config.control_plane = session;
+  saveConfig(config);
+  printValue(
+    { authenticated: true, organization_id: identity.organization_id, user_id: identity.user_id },
+    flags,
+    () => "Connected to AceTeam. Active organization: " + String(identity.organization_id),
+  );
 }
 
 async function loginOwnKey(): Promise<void> {
@@ -150,17 +134,61 @@ async function loginOllama(): Promise<void> {
 }
 
 export const loginCommand = new Command("login")
-  .description("Configure LLM provider (AceTeam, API key, or Ollama)")
-  .option("--api-key <key>", "Set AceTeam API key non-interactively")
-  .action(async (options: { apiKey?: string }) => {
-    if (options.apiKey) {
-      const config = loadConfig();
-      config.fabric_url = config.fabric_url || "https://app.aceteam.ai";
-      config.fabric_api_key = options.apiKey;
-      saveConfig(config);
-      output.success("AceTeam API key saved");
+  .description("Connect Ace to the AceTeam control plane")
+  .option("--api-key <key>", "Use an API key for one organization")
+  .option("--api-key-env <name>", "Read a single-org API key from an environment variable")
+  .option("--mcp-url <url>", "Control-plane MCP URL")
+  .option("--json", "Output JSON")
+  .option("--quiet", "Suppress successful output");
+
+loginCommand.action(async (options: { apiKey?: string; apiKeyEnv?: string; mcpUrl?: string }) => {
+  const flags = outputFlags(loginCommand);
+  await runCli(async () => {
+    if (options.apiKey && options.apiKeyEnv) {
+      throw new CliError(2, "Choose either --api-key or --api-key-env.");
+    }
+    const apiKey = options.apiKeyEnv ? process.env[options.apiKeyEnv] : options.apiKey;
+    if (options.apiKeyEnv && !apiKey) {
+      throw new CliError(2, "API key environment variable is empty.");
+    }
+    if (!apiKey) {
+      await loginAceTeam(flags, options.mcpUrl);
       return;
     }
+    const config = loadConfig();
+    const session = {
+      kind: "api_key" as const,
+      mcp_url: options.mcpUrl || config.control_plane?.mcp_url || DEFAULT_MCP_URL,
+      access_token: apiKey.trim(),
+    };
+    const identity = await new ControlPlaneClient(session).identity();
+    config.control_plane = session;
+    config.fabric_url = config.fabric_url || "https://app.aceteam.ai";
+    config.fabric_api_key = session.access_token;
+    saveConfig(config);
+    printValue(
+      { authenticated: true, organization_id: identity.organization_id, user_id: identity.user_id },
+      flags,
+      () => "Connected to AceTeam. Active organization: " + String(identity.organization_id),
+    );
+  }, flags);
+});
 
-    await runLoginFlow();
-  });
+export const logoutCommand = new Command("logout")
+  .description("Remove the saved AceTeam control-plane session")
+  .option("--json", "Output JSON")
+  .option("--quiet", "Suppress successful output");
+
+logoutCommand.action(async () => {
+  const flags = outputFlags(logoutCommand);
+  await runCli(async () => {
+    const config = loadConfig();
+    if (config.control_plane?.kind === "api_key" &&
+        config.fabric_api_key === config.control_plane.access_token) {
+      delete config.fabric_api_key;
+    }
+    delete config.control_plane;
+    saveConfig(config);
+    printValue({ authenticated: false }, flags, () => "Logged out of AceTeam.");
+  }, flags);
+});
