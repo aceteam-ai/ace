@@ -29,7 +29,7 @@ function textChunk(chunk: string | Uint8Array): string {
 }
 
 export function beginLegacyOutput(command: Command): void {
-  if (["login", "logout", "whoami", "org", "mcp", "completion", "__complete"].includes(topLevelName(command))) return;
+  if (["login", "logout", "whoami", "org", "mcp", "agent", "completion", "__complete"].includes(topLevelName(command))) return;
   const flags = outputFlags(command);
   if ((!flags.json && !flags.quiet) || active) return;
   active = {

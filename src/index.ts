@@ -6,6 +6,7 @@ import { runCommand } from "./commands/run.js";
 import { loginCommand, logoutCommand } from "./commands/login.js";
 import { mcpCommand, orgCommand, whoamiCommand } from "./commands/control-plane.js";
 import { addCompletionCommands } from "./commands/completion.js";
+import { agentCommand } from "./commands/agent.js";
 import { beginLegacyOutput, finishLegacyOutput } from "./utils/legacy-output.js";
 
 function addOutputOptions(command: Command): void {
@@ -39,6 +40,7 @@ if (process.argv.length === 2 && process.stdin.isTTY) {
   program.addCommand(whoamiCommand);
   program.addCommand(orgCommand);
   program.addCommand(mcpCommand);
+  program.addCommand(agentCommand);
   addCompletionCommands(program);
 
   addOutputOptions(program);
