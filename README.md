@@ -58,6 +58,8 @@ ace mcp --schema forge_pr_list --json
 ace mcp forge_pr_list --json '{"owner":"aceteam-ai","repo":"ace"}'
 printf '%s\n' '{"owner":"aceteam-ai","repo":"ace"}' | ace mcp forge_pr_list --json -
 ace mcp forge_pr_list --arg owner=aceteam-ai --arg repo=ace
+ace agent list
+ace agent ask "Researcher" "Summarize this week's customer feedback"
 ace logout
 
 # For a single organization in a script. The key also configures Fabric.
@@ -69,6 +71,11 @@ consent is required for `ace org use`. The selected organization is restored
 on later commands, including after an OAuth token refresh. API-key login saves
 the Fabric credential even if control-plane verification fails, then exits
 with an error so a script does not mistake the control-plane session for ready.
+
+`ace agent ask` sends one independent, governed turn to the selected agent.
+Use an agent ID from `ace agent list` if names collide. The control plane
+returns the response or its approval status when the turn finishes; the current
+agent MCP tool does not stream tokens or keep a conversation history.
 
 `--json` emits machine-readable output on every command, and `--quiet`
 suppresses successful output. For `ace mcp`, `--json` alone selects JSON
