@@ -140,12 +140,24 @@ export class ControlPlaneClient {
       config.control_plane = updated;
       saveConfig(config);
     },
+    private readonly readSavedSession: () => ControlPlaneSession | undefined = () => loadConfig().control_plane,
   ) {
     validateMcpUrl(session.mcp_url);
   }
 
   get authKind(): ControlPlaneSession["kind"] {
     return this.session.kind;
+  }
+
+  private adoptRotatedSession(): boolean {
+    const saved = this.readSavedSession();
+    if (saved?.kind !== "oauth" || !saved.access_token || !saved.refresh_token ||
+        saved.client_id !== this.session.client_id || saved.mcp_url !== this.session.mcp_url ||
+        saved.refresh_token === this.session.refresh_token) return false;
+    this.session = { ...saved, active_org_id: this.session.active_org_id ?? saved.active_org_id };
+    this.ready = false;
+    this.sessionId = undefined;
+    return true;
   }
 
   private async refreshIfNeeded(force = false): Promise<void> {
@@ -156,6 +168,7 @@ export class ControlPlaneClient {
     if (!force && (!this.session.expires_at || Date.now() < this.session.expires_at - 60_000)) {
       return;
     }
+    if (this.adoptRotatedSession()) return;
     const endpoint = new URL("/api/oauth/token", this.session.mcp_url);
     const body = new URLSearchParams({
       grant_type: "refresh_token",
@@ -174,7 +187,13 @@ export class ControlPlaneClient {
     } catch {
       throw new CliError(4, "Could not reach the control plane.");
     }
-    if (!response.ok) throw new CliError(3, "Session expired. Run ace login again.");
+    if (!response.ok) {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        if (this.adoptRotatedSession()) return;
+        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      throw new CliError(3, "Session expired. Run ace login again.");
+    }
     const token = object(await response.json());
     if (typeof token.access_token !== "string" || typeof token.refresh_token !== "string") {
       throw new CliError(4, "The control plane returned an invalid token response.");
@@ -209,9 +228,13 @@ export class ControlPlaneClient {
     } catch {
       throw new CliError(4, "Could not reach the control plane.");
     }
-    if (response.status === 401 && retry && this.session.kind === "oauth") {
+    if (response.status === 401 && retry && this.session.kind === "oauth" &&
+        payload.method !== "notifications/initialized") {
       await this.refreshIfNeeded(true);
-      if (payload.method !== "initialize") await this.connect();
+      if (payload.method !== "initialize") {
+        await this.connect();
+        await this.restoreSelectedOrgAfterRefresh();
+      }
       return this.post(payload, false);
     }
     if (response.status === 401 || response.status === 403) {
@@ -249,6 +272,30 @@ export class ControlPlaneClient {
     await this.connect();
     const rpc = await this.post({ jsonrpc: "2.0", id: this.nextId++, method, params });
     return rpc.result;
+  }
+
+  private async callAfterRefresh(name: string, args: Record<string, unknown> = {}): Promise<McpResult> {
+    const rpc = await this.post({
+      jsonrpc: "2.0",
+      id: this.nextId++,
+      method: "tools/call",
+      params: { name, arguments: args },
+    }, false);
+    const result = object(rpc.result) as McpResult;
+    if (result.isError) throw new CliError(4, "Could not restore the selected organization.");
+    return result;
+  }
+
+  private async restoreSelectedOrgAfterRefresh(): Promise<void> {
+    const selected = this.session.active_org_id;
+    if (!selected) return;
+    const identity = object(unwrapToolResult(await this.callAfterRefresh("whoami")));
+    if (identity.organization_id === selected) return;
+    await this.callAfterRefresh("switch_active_org", { organization_id: selected });
+    const restored = object(unwrapToolResult(await this.callAfterRefresh("whoami")));
+    if (restored.organization_id !== selected) {
+      throw new CliError(4, "The control plane did not switch to the selected organization.");
+    }
   }
 
   async listTools(): Promise<McpTool[]> {

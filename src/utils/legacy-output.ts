@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { outputFlags, type OutputFlags } from "./cli-output.js";
+import { CliError } from "./control-plane.js";
 
 class LegacyExit extends Error {
   constructor(readonly status: number) {
@@ -24,6 +25,14 @@ function topLevelName(command: Command): string {
   return current.name();
 }
 
+function commandPath(command: Command): string {
+  const names: string[] = [];
+  for (let current: Command | null = command; current?.parent; current = current.parent) {
+    names.unshift(current.name());
+  }
+  return names.join(" ");
+}
+
 function textChunk(chunk: string | Uint8Array): string {
   return typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf-8");
 }
@@ -32,6 +41,9 @@ export function beginLegacyOutput(command: Command): void {
   if (["login", "logout", "whoami", "org", "mcp"].includes(topLevelName(command))) return;
   const flags = outputFlags(command);
   if ((!flags.json && !flags.quiet) || active) return;
+  if (["init", "fabric login", "workflow create"].includes(commandPath(command))) {
+    throw new CliError(2, "This command prompts for input. Run it without JSON or quiet output.");
+  }
   active = {
     flags,
     stdout: [],

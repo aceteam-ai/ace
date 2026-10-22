@@ -10,6 +10,7 @@ import {
   type McpTool,
 } from "../../src/utils/control-plane.js";
 import { browserLogin } from "../../src/utils/oauth.js";
+import type { ControlPlaneSession } from "../../src/utils/config.js";
 import { parseToolArgs } from "../../src/commands/control-plane.js";
 import { runCli } from "../../src/utils/cli-output.js";
 
@@ -190,6 +191,7 @@ describe("control-plane MCP client", () => {
       },
       fakeFetch as unknown as typeof fetch,
       persisted,
+      () => undefined,
     );
 
     expect((await client.ensureSelectedOrg()).organization_id).toBe("org-b");
@@ -205,6 +207,103 @@ describe("control-plane MCP client", () => {
       "tools/call:switch_active_org",
       "tools/call:whoami",
     ]);
+  });
+
+  it("restores the selected org before replaying a tool call after a 401", async () => {
+    let activeOrg = "org-a";
+    let rejectFirstCall = true;
+    const seen: string[] = [];
+    const acted: Array<{ org: string; authorization: string | undefined }> = [];
+    const fakeFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/api/oauth/token")) {
+        seen.push("refresh");
+        activeOrg = "org-a";
+        return new Response(JSON.stringify({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+          expires_in: 3600,
+        }), { status: 200 });
+      }
+      const payload = JSON.parse(String(init?.body)) as {
+        method: string;
+        id?: number;
+        params?: { name?: string; arguments?: { organization_id?: string } };
+      };
+      const label = payload.params?.name || payload.method;
+      seen.push(label);
+      if (label === "forge_pr_list" && rejectFirstCall) {
+        rejectFirstCall = false;
+        return new Response(null, { status: 401 });
+      }
+      if (label === "forge_pr_list") {
+        acted.push({ org: activeOrg, authorization: (init?.headers as Record<string, string>)?.Authorization });
+      }
+      if (label === "switch_active_org") activeOrg = String(payload.params?.arguments?.organization_id);
+      if (payload.method === "notifications/initialized") return new Response(null, { status: 202 });
+      const result = payload.method === "initialize"
+        ? { protocolVersion: "2025-06-18" }
+        : textResult(label === "whoami"
+          ? { organization_id: activeOrg }
+          : { acted_in_org: activeOrg });
+      return new Response(JSON.stringify({ id: payload.id, result }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    const client = new ControlPlaneClient({
+      kind: "oauth",
+      mcp_url: "https://aceteam.ai/mcp",
+      access_token: "old-access",
+      refresh_token: "old-refresh",
+      client_id: "client-1",
+      active_org_id: "org-b",
+    }, fakeFetch as unknown as typeof fetch, vi.fn(), () => undefined);
+
+    await client.ensureSelectedOrg();
+    expect(unwrapToolResult(await client.callTool("forge_pr_list"))).toEqual({ acted_in_org: "org-b" });
+    expect(acted).toEqual([{ org: "org-b", authorization: "Bearer new-access" }]);
+    expect(seen.slice(-8)).toEqual([
+      "forge_pr_list", "refresh", "initialize", "notifications/initialized", "whoami",
+      "switch_active_org", "whoami", "forge_pr_list",
+    ]);
+  });
+
+  it("adopts a refresh token rotated by another CLI process", async () => {
+    const original: ControlPlaneSession = {
+      kind: "oauth",
+      mcp_url: "https://aceteam.ai/mcp",
+      access_token: "old-access",
+      refresh_token: "old-refresh",
+      client_id: "client-1",
+      expires_at: Date.now() - 1000,
+    };
+    let saved = { ...original };
+    let refreshes = 0;
+    const fakeFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/api/oauth/token")) {
+        refreshes++;
+        return new Response(JSON.stringify({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+          expires_in: 3600,
+        }), { status: 200 });
+      }
+      const payload = JSON.parse(String(init?.body)) as { method: string; id?: number };
+      if (payload.method === "notifications/initialized") return new Response(null, { status: 202 });
+      return new Response(JSON.stringify({
+        id: payload.id,
+        result: payload.method === "initialize"
+          ? { protocolVersion: "2025-06-18" }
+          : textResult({ organization_id: "org-a" }),
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    const persist = (session: ControlPlaneSession) => { saved = { ...session }; };
+    const first = new ControlPlaneClient({ ...original }, fakeFetch as unknown as typeof fetch, persist, () => saved);
+    const second = new ControlPlaneClient({ ...original }, fakeFetch as unknown as typeof fetch, persist, () => saved);
+
+    expect((await first.identity()).organization_id).toBe("org-a");
+    expect((await second.identity()).organization_id).toBe("org-a");
+    expect(refreshes).toBe(1);
   });
 });
 
@@ -245,22 +344,28 @@ describe("browser OAuth and CLI argument contract", () => {
     expect(fakeFetch.mock.calls.every(([, init]) => init?.redirect === "error")).toBe(true);
   });
 
-  it("rejects a browser callback with the wrong OAuth state", async () => {
-    const fakeFetch = vi.fn(async () =>
-      new Response(JSON.stringify({ client_id: "client-1" }), { status: 201 }),
+  it("ignores a browser callback with the wrong OAuth state", async () => {
+    const fakeFetch = vi.fn(async (input: RequestInfo | URL) =>
+      new Response(JSON.stringify(new URL(String(input)).pathname.endsWith("/register")
+        ? { client_id: "client-1" }
+        : { access_token: "access", refresh_token: "refresh", expires_in: 3600 }), { status: 200 }),
     );
-    await expect(browserLogin(
+    const session = await browserLogin(
       "https://aceteam.ai/mcp",
       (url) => {
         const callback = new URL(new URL(url).searchParams.get("redirect_uri")!);
         callback.searchParams.set("state", "wrong");
         callback.searchParams.set("code", "code-1");
-        void fetch(callback);
+        void fetch(callback).then(() => {
+          callback.searchParams.set("state", new URL(url).searchParams.get("state")!);
+          return fetch(callback);
+        });
       },
       fakeFetch as unknown as typeof fetch,
       5000,
-    )).rejects.toMatchObject({ exitCode: 3, message: "OAuth state mismatch. Run ace login again." });
-    expect(fakeFetch).toHaveBeenCalledTimes(1);
+    );
+    expect(session.access_token).toBe("access");
+    expect(fakeFetch).toHaveBeenCalledTimes(2);
   });
 
   it("parses JSON and key=value arguments and gives errors stable exit codes", async () => {
@@ -269,6 +374,9 @@ describe("browser OAuth and CLI argument contract", () => {
       repo: "aceteam",
       limit: 3,
     });
+    expect(parseToolArgs(undefined, ["owner=123"], {
+      properties: { owner: { type: "string" } },
+    })).toEqual({ owner: "123" });
     expect(() => parseToolArgs("[]", [])).toThrow(CliError);
     expect(() => parseToolArgs(undefined, ["broken"])).toThrow(CliError);
     const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);

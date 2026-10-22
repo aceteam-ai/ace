@@ -56,6 +56,7 @@ export async function browserLogin(
     finish = resolve;
     fail = reject;
   });
+  void callback.catch(() => undefined);
   const server = createServer((request, response) => {
     const url = new URL(request.url || "/", "http://localhost");
     if (url.pathname !== "/callback") {
@@ -64,13 +65,11 @@ export async function browserLogin(
     }
     if (url.searchParams.get("state") !== state) {
       response.writeHead(400).end("Invalid state. Return to Ace and retry.");
-      fail(new CliError(3, "OAuth state mismatch. Run ace login again."));
       return;
     }
     const code = url.searchParams.get("code");
     if (!code) {
       response.writeHead(400).end("Authorization was not completed.");
-      fail(new CliError(3, "Authorization was not completed."));
       return;
     }
     response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });

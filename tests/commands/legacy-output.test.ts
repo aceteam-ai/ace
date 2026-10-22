@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
 import { beginLegacyOutput, finishLegacyOutput } from "../../src/utils/legacy-output.js";
+import { CliError } from "../../src/utils/control-plane.js";
 
 afterEach(() => {
   finishLegacyOutput();
@@ -43,6 +44,13 @@ it("suppresses successful output in quiet mode", () => {
     process.stdout.write = original;
   }
   expect(writes).toEqual([]);
+});
+
+it("rejects capture for commands that need visible prompts", () => {
+  const root = new Command("ace");
+  const login = root.command("fabric").command("login");
+  login.setOptionValue("quiet", true);
+  expect(() => beginLegacyOutput(login)).toThrow(CliError);
 });
 
 it("turns a legacy process exit into a stable JSON error", () => {

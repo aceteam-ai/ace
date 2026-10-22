@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import YAML from "yaml";
@@ -48,9 +49,18 @@ export function saveConfig(config: AceConfig): void {
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
-  writeFileSync(CONFIG_PATH, YAML.stringify(config), {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
-  chmodSync(CONFIG_PATH, 0o600);
+  const tempPath = CONFIG_PATH + "." + process.pid + "." + randomBytes(6).toString("hex") + ".tmp";
+  let renamed = false;
+  try {
+    writeFileSync(tempPath, YAML.stringify(config), {
+      encoding: "utf-8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    chmodSync(tempPath, 0o600);
+    renameSync(tempPath, CONFIG_PATH);
+    renamed = true;
+  } finally {
+    if (!renamed) rmSync(tempPath, { force: true });
+  }
 }

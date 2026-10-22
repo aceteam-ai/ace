@@ -6,12 +6,24 @@ import { runCommand } from "./commands/run.js";
 import { loginCommand, logoutCommand } from "./commands/login.js";
 import { mcpCommand, orgCommand, whoamiCommand } from "./commands/control-plane.js";
 import { beginLegacyOutput, finishLegacyOutput } from "./utils/legacy-output.js";
+import { CliError } from "./utils/control-plane.js";
 
 function addOutputOptions(command: Command): void {
   const options = command.options.map((option) => option.long);
   if (!options.includes("--json")) command.option("--json", "Output JSON");
   if (!options.includes("--quiet")) command.option("--quiet", "Suppress successful output");
   for (const child of command.commands) addOutputOptions(child);
+}
+
+function configureErrorHandling(command: Command): void {
+  command.exitOverride();
+  command.configureOutput({
+    writeOut: (value) => process.stdout.write(value),
+    writeErr: (value) => {
+      if (!process.argv.includes("--json")) process.stderr.write(value);
+    },
+  });
+  for (const child of command.commands) configureErrorHandling(child);
 }
 
 // No args + TTY → interactive mode
@@ -40,13 +52,7 @@ if (process.argv.length === 2 && process.stdin.isTTY) {
   program.addCommand(mcpCommand);
 
   addOutputOptions(program);
-  program.exitOverride();
-  program.configureOutput({
-    writeOut: (value) => process.stdout.write(value),
-    writeErr: (value) => {
-      if (!process.argv.includes("--json")) process.stderr.write(value);
-    },
-  });
+  configureErrorHandling(program);
   program.hook("preAction", (_root, action) => beginLegacyOutput(action));
   program.hook("postAction", () => {
     finishLegacyOutput();
@@ -55,7 +61,14 @@ if (process.argv.length === 2 && process.stdin.isTTY) {
     await program.parseAsync();
   } catch (error) {
     if (!finishLegacyOutput(error)) {
-      if (error instanceof CommanderError) {
+      if (error instanceof CliError) {
+        process.exitCode = error.exitCode;
+        if (process.argv.includes("--json")) {
+          console.error(JSON.stringify({ error: { code: error.exitCode, message: error.message } }));
+        } else {
+          console.error("Error: " + error.message);
+        }
+      } else if (error instanceof CommanderError) {
         if (error.code === "commander.helpDisplayed" || error.code === "commander.version") {
           process.exitCode = 0;
         } else {

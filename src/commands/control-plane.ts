@@ -93,7 +93,9 @@ orgUseCommand.action(async (org: string) => {
   }, flags);
 });
 
-function parseArgValue(raw: string): unknown {
+function parseArgValue(raw: string, schema?: unknown): unknown {
+  if (schema && typeof schema === "object" && !Array.isArray(schema) &&
+      (schema as { type?: unknown }).type === "string") return raw;
   try {
     return JSON.parse(raw) as unknown;
   } catch {
@@ -101,7 +103,11 @@ function parseArgValue(raw: string): unknown {
   }
 }
 
-export function parseToolArgs(jsonOption: string | boolean | undefined, args: string[]): Record<string, unknown> {
+export function parseToolArgs(
+  jsonOption: string | boolean | undefined,
+  args: string[],
+  inputSchema?: Record<string, unknown>,
+): Record<string, unknown> {
   let parsed: Record<string, unknown> = {};
   if (typeof jsonOption === "string") {
     let value: unknown;
@@ -120,7 +126,11 @@ export function parseToolArgs(jsonOption: string | boolean | undefined, args: st
     if (separator <= 0) throw new CliError(2, "Use --arg key=value.");
     const key = pair.slice(0, separator);
     if (Object.hasOwn(parsed, key)) throw new CliError(2, "Argument " + key + " was supplied twice.");
-    parsed[key] = parseArgValue(pair.slice(separator + 1));
+    const properties = inputSchema?.properties;
+    const propertySchema = properties && typeof properties === "object" && !Array.isArray(properties)
+      ? (properties as Record<string, unknown>)[key]
+      : undefined;
+    parsed[key] = parseArgValue(pair.slice(separator + 1), propertySchema);
   }
   return parsed;
 }
@@ -167,7 +177,7 @@ mcpCommand.action(async (name: string | undefined) => {
     }
     if (!name) throw new CliError(2, "Supply a tool name, --list, or --schema.");
     const tool = await client.getTool(name);
-    const args = parseToolArgs(options.json, options.arg);
+    const args = parseToolArgs(options.json, options.arg, tool.inputSchema);
     const properties = tool.inputSchema.properties;
     if (properties && typeof properties === "object" && !Array.isArray(properties) &&
         "expected_org_id" in properties && !Object.hasOwn(args, "expected_org_id")) {
