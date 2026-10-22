@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { type ControlPlaneSession } from "./config.js";
-import { CliError, DEFAULT_MCP_URL } from "./control-plane.js";
+import { CliError, DEFAULT_MCP_URL, validateMcpUrl } from "./control-plane.js";
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -20,6 +20,7 @@ async function jsonPost(
   try {
     response = await fetchImpl(url, {
       method: "POST",
+      redirect: "error",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
@@ -44,10 +45,7 @@ export async function browserLogin(
   fetchImpl: typeof fetch = fetch,
   timeoutMs = 300_000,
 ): Promise<ControlPlaneSession> {
-  const mcp = new URL(mcpUrl);
-  if (mcp.protocol !== "https:" && mcp.hostname !== "localhost") {
-    throw new CliError(2, "Control-plane URL must use HTTPS.");
-  }
+  const mcp = new URL(validateMcpUrl(mcpUrl));
   const state = randomBytes(24).toString("base64url");
   const verifier = randomBytes(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
@@ -121,6 +119,7 @@ export async function browserLogin(
     try {
       response = await fetchImpl(new URL("/api/oauth/token", mcp), {
         method: "POST",
+        redirect: "error",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: form,
       });

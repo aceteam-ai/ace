@@ -4,6 +4,20 @@ import { loadConfig, saveConfig, type ControlPlaneSession } from "./config.js";
 
 export const DEFAULT_MCP_URL = "https://aceteam.ai/mcp";
 
+export function validateMcpUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new CliError(2, "Control-plane URL must be a valid HTTPS URL or use local HTTP.");
+  }
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
+    throw new CliError(2, "Control-plane URL must use HTTPS or local HTTP.");
+  }
+  return url.toString();
+}
+
 export class CliError extends Error {
   constructor(
     public readonly exitCode: 2 | 3 | 4,
@@ -126,7 +140,9 @@ export class ControlPlaneClient {
       config.control_plane = updated;
       saveConfig(config);
     },
-  ) {}
+  ) {
+    validateMcpUrl(session.mcp_url);
+  }
 
   get authKind(): ControlPlaneSession["kind"] {
     return this.session.kind;
@@ -151,6 +167,7 @@ export class ControlPlaneClient {
     try {
       response = await this.fetchImpl(endpoint, {
         method: "POST",
+        redirect: "error",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body,
       });
@@ -185,6 +202,7 @@ export class ControlPlaneClient {
     try {
       response = await this.fetchImpl(this.session.mcp_url, {
         method: "POST",
+        redirect: "error",
         headers,
         body: JSON.stringify(payload),
       });

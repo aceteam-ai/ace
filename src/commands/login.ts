@@ -5,7 +5,7 @@ import ora from "ora";
 import { loadConfig, saveConfig, type ControlPlaneSession } from "../utils/config.js";
 import { detectOllama } from "../utils/provider-detect.js";
 import * as output from "../utils/output.js";
-import { CliError, ControlPlaneClient, DEFAULT_MCP_URL } from "../utils/control-plane.js";
+import { CliError, ControlPlaneClient, DEFAULT_MCP_URL, validateMcpUrl } from "../utils/control-plane.js";
 import { browserLogin } from "../utils/oauth.js";
 import { outputFlags, printValue, runCli, type OutputFlags } from "../utils/cli-output.js";
 
@@ -61,6 +61,10 @@ async function loginAceTeam(flags: OutputFlags, mcpUrl?: string): Promise<void> 
   const identity = await new ControlPlaneClient(session).identity();
   if (typeof identity.organization_id !== "string") {
     throw new CliError(4, "The control plane returned no active organization.");
+  }
+  if (config.control_plane?.kind === "api_key" &&
+      config.fabric_api_key === config.control_plane.access_token) {
+    delete config.fabric_api_key;
   }
   session.active_org_id = identity.organization_id;
   config.control_plane = session;
@@ -160,7 +164,7 @@ loginCommand.action(async (options: { apiKey?: string; apiKeyEnv?: string; mcpUr
     const config = loadConfig();
     const session: ControlPlaneSession = {
       kind: "api_key",
-      mcp_url: options.mcpUrl || config.control_plane?.mcp_url || DEFAULT_MCP_URL,
+      mcp_url: validateMcpUrl(options.mcpUrl || config.control_plane?.mcp_url || DEFAULT_MCP_URL),
       access_token: apiKey.trim(),
     };
     const identity = await new ControlPlaneClient(session).identity();

@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import {
   CliError,
   ControlPlaneClient,
+  validateMcpUrl,
   unwrapToolResult,
   validateToolArgs,
   type McpTool,
@@ -30,6 +31,19 @@ function textResult(value: unknown): object {
 }
 
 describe("control-plane MCP client", () => {
+  it("accepts HTTPS and local HTTP but rejects remote plaintext transport", () => {
+    expect(validateMcpUrl("https://aceteam.ai/mcp")).toBe("https://aceteam.ai/mcp");
+    expect(validateMcpUrl("http://127.0.0.1:3000/mcp")).toBe("http://127.0.0.1:3000/mcp");
+    expect(validateMcpUrl("http://[::1]:3000/mcp")).toBe("http://[::1]:3000/mcp");
+    expect(() => validateMcpUrl("http://remote.example/mcp")).toThrow(CliError);
+    expect(() => validateMcpUrl("not a url")).toThrow(CliError);
+    expect(() => new ControlPlaneClient({
+      kind: "api_key",
+      mcp_url: "http://remote.example/mcp",
+      access_token: "secret",
+    })).toThrow(CliError);
+  });
+
   it("unwraps AceTeam's acting-org result envelope for machine JSON", () => {
     expect(unwrapToolResult({
       structuredContent: {
@@ -111,12 +125,13 @@ describe("control-plane MCP client", () => {
       new Response(null, { status: 202 }),
       new Response(JSON.stringify({ result: { isError: true, content: [{ type: "text", text: "denied" }] } }), { status: 200, headers: { "Content-Type": "application/json" } }),
     ];
-    const fakeFetch = vi.fn(async () => responses.shift()!);
+    const fakeFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => responses.shift()!);
     const client = new ControlPlaneClient(
       { kind: "api_key", mcp_url: "https://aceteam.ai/mcp", access_token: "test" },
       fakeFetch as unknown as typeof fetch,
     );
     await expect(client.callTool("forge_pr_list")).rejects.toMatchObject({ exitCode: 4, message: "denied" });
+    expect(fakeFetch.mock.calls.every(([, init]) => init?.redirect === "error")).toBe(true);
   });
 
   it("fails closed if a single-org API key acts in a different org than its saved context", async () => {
@@ -227,6 +242,7 @@ describe("browser OAuth and CLI argument contract", () => {
     expect(new URL(authorizationUrl).searchParams.get("code_challenge_method")).toBe("S256");
     expect(tokenBody).toContain("code_verifier=");
     expect(tokenBody).toContain("resource=https%3A%2F%2Faceteam.ai%2Fmcp");
+    expect(fakeFetch.mock.calls.every(([, init]) => init?.redirect === "error")).toBe(true);
   });
 
   it("rejects a browser callback with the wrong OAuth state", async () => {

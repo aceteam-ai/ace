@@ -69,7 +69,8 @@ suppresses successful output. For `ace mcp`, `--json` alone selects JSON
 output; `--json '{...}'` also supplies tool arguments. Invalid input exits
 with status 2, authentication failures with 3, and control-plane failures
 with 4. The config file is restricted to its owner. Set `ACE_CONFIG_DIR`
-to use a different config directory.
+to use a different config directory. A custom `--mcp-url` requires HTTPS,
+except for a local HTTP server on `localhost`, `127.0.0.1`, or `::1`.
 
 ## How It Works
 
