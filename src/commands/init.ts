@@ -22,6 +22,7 @@ import { detectProvider, providerLabel } from "../utils/provider-detect.js";
 import {
   detectContainerRuntime,
   isProxyRunning,
+  resolveProxyUpstream,
   startProxy,
 } from "../utils/proxy.js";
 import { DEMOS } from "../demos/index.js";
@@ -251,10 +252,25 @@ export const initCommand = new Command("init")
     console.log(chalk.bold("\n6. SafeClaw Proxy"));
 
     const containerRuntime = detectContainerRuntime();
-    if (containerRuntime) {
+    let upstream: ReturnType<typeof resolveProxyUpstream> = null;
+    let upstreamError: string | null = null;
+    try {
+      upstream = resolveProxyUpstream();
+    } catch (error) {
+      upstreamError = error instanceof Error ? error.message : String(error);
+    }
+
+    if (upstreamError) {
+      output.warn(`SafeClaw proxy not started: ${upstreamError}`);
+    } else if (containerRuntime) {
       const alreadyRunning = isProxyRunning();
       if (alreadyRunning) {
         ora().succeed("SafeClaw proxy already running on port 8899");
+        if (upstream) {
+          output.warn(
+            "An existing proxy is running. Stop it and run ace init again to apply the upstream URL."
+          );
+        }
         config.proxy_enabled = true;
         config.proxy_url = "http://localhost:8899";
         config.proxy_container = "safeclaw-proxy";
@@ -268,10 +284,10 @@ export const initCommand = new Command("init")
 
         if (startSafety) {
           const spinner = ora("Starting SafeClaw proxy...").start();
-          const started = startProxy(containerRuntime);
+          const started = startProxy(containerRuntime, 8899, upstream);
           if (started) {
             spinner.succeed(
-              "SafeClaw proxy running — dashboard at http://localhost:8899/aep/"
+              "SafeClaw proxy running. Dashboard: http://localhost:8899/dashboard/"
             );
             config.proxy_enabled = true;
             config.proxy_url = "http://localhost:8899";
@@ -281,11 +297,17 @@ export const initCommand = new Command("init")
             spinner.fail(
               "Could not start proxy container. You can start it manually later with:"
             );
-            console.log(
-              chalk.dim(
-                `  ${containerRuntime} run -d --name safeclaw-proxy -p 8899:8899 ghcr.io/aceteam-ai/aep-proxy:latest`
-              )
-            );
+            if (upstream) {
+              output.info(
+                "See the custom upstream instructions in the README for manual startup."
+              );
+            } else {
+              console.log(
+                chalk.dim(
+                  `  ${containerRuntime} run -d --name safeclaw-proxy -p 8899:8899 ghcr.io/aceteam-ai/aep-proxy:latest`
+                )
+              );
+            }
           }
         } else {
           output.info("Skipped — run ace init again to enable later");
