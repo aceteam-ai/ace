@@ -177,6 +177,45 @@ Show connected node load metrics.
 
 ## Using Local LLMs (Ollama, vLLM, etc.)
 
+### Observe an OpenAI-compatible node through the AEP proxy
+
+Set the upstream URL before running `ace init`. The URL must be reachable from
+the proxy container. Use a node hostname or container-accessible host address,
+not `localhost` on the host machine. The proxy accepts one upstream at a time.
+
+```bash
+export UPSTREAM_OPENAI_BASE_URL=http://node.internal:8000/v1
+ace init
+```
+
+Then point the coding agent at the local proxy:
+
+```bash
+export OPENAI_BASE_URL=http://localhost:8899/v1
+```
+
+Requests sent through that URL appear in the local AEP dashboard at
+`http://localhost:8899/dashboard/`. The proxy appends the request path, so
+`ace init` removes a trailing `/v1` from the upstream base URL before passing
+it to the container. A custom Anthropic endpoint can use
+`UPSTREAM_ANTHROPIC_BASE_URL` and an agent-side `ANTHROPIC_BASE_URL` instead.
+
+For compatibility, `ace init` also accepts `OPENAI_BASE_URL` or
+`ANTHROPIC_BASE_URL` as the upstream before the agent is pointed at the proxy.
+The `UPSTREAM_` names take precedence, avoiding a loop when the agent's base
+URL already points to `localhost:8899`. Set only one upstream provider URL for
+each proxy instance. An existing proxy keeps its current target until it is
+stopped and started again.
+
+If automatic startup fails, the equivalent manual container command for the
+example node is:
+
+```bash
+docker run -d --name safeclaw-proxy -p 8899:8899 \
+  ghcr.io/aceteam-ai/aep-proxy:latest \
+  proxy --port 8899 --host 0.0.0.0 --target http://node.internal:8000
+```
+
 Workflows use [litellm](https://docs.litellm.ai/) under the hood, which supports 100+ LLM providers — including local model servers. No API key needed for local models.
 
 ### Ollama
