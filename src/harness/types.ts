@@ -231,6 +231,7 @@ export type NativeHarnessEvent = NativeHarnessEventPayload & {
   timestamp: string;
 };
 
+/** Observers are isolated: a throwing listener cannot fail a command or block peers. */
 export type NativeHarnessEventListener = (event: NativeHarnessEvent) => void;
 
 export interface NativeHarnessAdapter {

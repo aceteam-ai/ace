@@ -114,7 +114,7 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
     this.knownNativeSessions.set(nativeSessionId, {
       workspace: command.workspace,
     });
-    return { status: "ok", value: identity };
+    return { status: "ok", value: Object.freeze({ ...identity }) };
   }
 
   async sendInput(
@@ -267,7 +267,7 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
     };
     this.sessions.set(command.sessionId, this.createSession(identity));
     this.usedSessionIds.add(command.sessionId);
-    return { status: "ok", value: identity };
+    return { status: "ok", value: Object.freeze({ ...identity }) };
   }
 
   async dispose(
@@ -310,7 +310,7 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
 
   private createSession(identity: NativeHarnessSessionIdentity): FakeSession {
     return {
-      identity,
+      identity: Object.freeze({ ...identity }),
       listeners: new Set(),
       pendingApprovals: new Map(),
       sequence: 0,
@@ -413,7 +413,12 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
     }
 
     for (const listener of session.listeners) {
-      listener(event);
+      try {
+        listener(event);
+      } catch {
+        // Observation is best effort. A consumer cannot change a command's
+        // result or prevent other consumers from seeing a committed event.
+      }
     }
 
     return event;

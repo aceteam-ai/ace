@@ -136,6 +136,56 @@ describe("FakeNativeHarnessAdapter", () => {
     ]);
   });
 
+  it("isolates throwing observers from approval results and later observers", async () => {
+    const adapter = new FakeNativeHarnessAdapter();
+    const session = await startSession(adapter, "session-a");
+    const received: string[] = [];
+    adapter.observe({ type: "session.observe", session }, (event) => {
+      if (event.type === "approval.resolved") throw new Error("observer failed");
+    });
+    adapter.observe({ type: "session.observe", session }, (event) => {
+      received.push(event.type);
+    });
+    adapter.emit(
+      session,
+      { type: "approval.requested", approvalId: "approval-1", prompt: "Proceed?", choices: ["allow"] },
+      "request-1"
+    );
+
+    const reply = await adapter.respondToApproval({
+      type: "approval.respond",
+      session,
+      approvalId: "approval-1",
+      decision: "allow",
+      correlationId: "request-1",
+    });
+    expect(reply.status).toBe("ok");
+    expect(received).toEqual(["approval.requested", "approval.resolved"]);
+    expect(await adapter.respondToApproval({
+      type: "approval.respond", session, approvalId: "approval-1", decision: "allow", correlationId: "request-1",
+    })).toMatchObject({ status: "rejected", code: "stale_approval" });
+  });
+
+  it("returns frozen identity copies that cannot change event attribution", async () => {
+    const adapter = new FakeNativeHarnessAdapter({ capabilities: { resume: { supported: true } } });
+    const first = await startSession(adapter, "session-a");
+    const second = await startSession(adapter, "session-b");
+    const events: NativeHarnessEvent[] = [];
+    adapter.observe({ type: "session.observe", session: first }, (event) => events.push(event));
+
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(() => { first.sessionId = second.sessionId; }).toThrow();
+    expect(() => { first.nativeSessionId = second.nativeSessionId; }).toThrow();
+    expect(adapter.emit(first, { type: "conversation.message", role: "assistant", text: "hello" }).status).toBe("ok");
+    expect(events[0]).toMatchObject({ sessionId: "session-a", nativeSessionId: "native-session-a" });
+
+    const resumed = await adapter.resume({
+      type: "session.resume", sessionId: "session-c", nativeSessionId: first.nativeSessionId!, workspace: "/synthetic/workspace",
+    });
+    expect(resumed.status).toBe("ok");
+    if (resumed.status === "ok") expect(Object.isFrozen(resumed.value)).toBe(true);
+  });
+
   it("reports cancellation as terminal and rejects later input", async () => {
     const adapter = new FakeNativeHarnessAdapter();
     const session = await startSession(adapter, "session-a");
