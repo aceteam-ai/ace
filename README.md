@@ -1,9 +1,9 @@
 # @aceteam/ace
 
 [![npm version](https://img.shields.io/npm/v/@aceteam/ace.svg)](https://www.npmjs.com/package/@aceteam/ace)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![License: Elastic-2.0](https://img.shields.io/badge/License-Elastic--2.0-green.svg)](LICENSE)
 
-AceTeam CLI - Run AI workflows locally from your terminal.
+AceTeam CLI for the control plane and local workflows.
 
 ## Install
 
@@ -37,6 +37,46 @@ ace workflow create hello-llm -o my-workflow.json
 # 4. Run it
 ace workflow run my-workflow.json --input prompt="Explain AI in one sentence"
 ```
+
+## Control plane
+
+`ace login` opens the provider menu. Choose AceTeam Fabric to configure the
+existing local workflow runner, or AceTeam control plane for browser
+authorization. `ace login --browser` goes directly to browser authorization.
+After approving the connection, the CLI saves a renewable session in
+`~/.ace/config.yaml`. Select the
+multi-org checkbox on the consent screen if you need `ace org use`. A single-org
+API key also works for read and tool calls:
+
+```bash
+ace login --browser
+ace whoami --json
+ace org list
+ace org use "My organization"
+ace mcp --list forge
+ace mcp --schema forge_pr_list --json
+ace mcp forge_pr_list --json '{"owner":"aceteam-ai","repo":"ace"}'
+ace mcp forge_pr_list --arg owner=aceteam-ai --arg repo=ace
+ace logout
+
+# For a single organization in a script. The key also configures Fabric.
+ace login --api-key-env ACETEAM_API_KEY
+```
+
+API-key connections cannot switch organizations. Browser login with multi-org
+consent is required for `ace org use`. The selected organization is restored
+on later commands, including after an OAuth token refresh. API-key login saves
+the Fabric credential even if control-plane verification fails, then exits
+with an error so a script does not mistake the control-plane session for ready.
+
+`--json` emits machine-readable output on every command, and `--quiet`
+suppresses successful output. For `ace mcp`, `--json` alone selects JSON
+output; `--json '{...}'` also supplies tool arguments. Invalid input exits
+with status 2, authentication failures with 3, and control-plane failures
+with 4. The config file is restricted to its owner. Set `ACE_CONFIG_DIR`
+to use a different config directory. A custom `--mcp-url` requires HTTPS,
+except for a local HTTP server on `localhost`, `127.0.0.1`, or `::1`.
+Commands that prompt for input require normal terminal output.
 
 ## How It Works
 

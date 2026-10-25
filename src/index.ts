@@ -1,9 +1,30 @@
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import { initCommand } from "./commands/init.js";
 import { workflowCommand } from "./commands/workflow.js";
 import { fabricCommand } from "./commands/fabric.js";
 import { runCommand } from "./commands/run.js";
-import { loginCommand } from "./commands/login.js";
+import { loginCommand, logoutCommand } from "./commands/login.js";
+import { mcpCommand, orgCommand, whoamiCommand } from "./commands/control-plane.js";
+import { beginLegacyOutput, finishLegacyOutput } from "./utils/legacy-output.js";
+import { CliError } from "./utils/control-plane.js";
+
+function addOutputOptions(command: Command): void {
+  const options = command.options.map((option) => option.long);
+  if (!options.includes("--json")) command.option("--json", "Output JSON");
+  if (!options.includes("--quiet")) command.option("--quiet", "Suppress successful output");
+  for (const child of command.commands) addOutputOptions(child);
+}
+
+function configureErrorHandling(command: Command): void {
+  command.exitOverride();
+  command.configureOutput({
+    writeOut: (value) => process.stdout.write(value),
+    writeErr: (value) => {
+      if (!process.argv.includes("--json")) process.stderr.write(value);
+    },
+  });
+  for (const child of command.commands) configureErrorHandling(child);
+}
 
 // No args + TTY → interactive mode
 if (process.argv.length === 2 && process.stdin.isTTY) {
@@ -14,14 +35,51 @@ if (process.argv.length === 2 && process.stdin.isTTY) {
 
   program
     .name("ace")
-    .description("AceTeam CLI - Run AI workflows locally")
-    .version("0.3.0");
+    .description("AceTeam CLI for the control plane and local workflows")
+    .version("0.3.0")
+    .enablePositionalOptions()
+    .option("--json", "Output JSON")
+    .option("--quiet", "Suppress successful output");
 
   program.addCommand(initCommand);
   program.addCommand(runCommand);
   program.addCommand(workflowCommand);
   program.addCommand(fabricCommand);
   program.addCommand(loginCommand);
+  program.addCommand(logoutCommand);
+  program.addCommand(whoamiCommand);
+  program.addCommand(orgCommand);
+  program.addCommand(mcpCommand);
 
-  program.parse();
+  addOutputOptions(program);
+  configureErrorHandling(program);
+  program.hook("preAction", (_root, action) => beginLegacyOutput(action));
+  program.hook("postAction", () => {
+    finishLegacyOutput();
+  });
+  try {
+    await program.parseAsync();
+  } catch (error) {
+    if (!finishLegacyOutput(error)) {
+      if (error instanceof CliError) {
+        process.exitCode = error.exitCode;
+        if (process.argv.includes("--json")) {
+          console.error(JSON.stringify({ error: { code: error.exitCode, message: error.message } }));
+        } else {
+          console.error("Error: " + error.message);
+        }
+      } else if (error instanceof CommanderError) {
+        if (error.code === "commander.helpDisplayed" || error.code === "commander.version") {
+          process.exitCode = 0;
+        } else {
+          process.exitCode = 2;
+          if (process.argv.includes("--json")) {
+            console.error(JSON.stringify({ error: { code: 2, message: error.message } }));
+          }
+        }
+      } else {
+        throw error;
+      }
+    }
+  }
 }

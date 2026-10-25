@@ -6,19 +6,25 @@ vi.mock("node:fs", () => ({
   readFileSync: vi.fn(),
   writeFileSync: vi.fn(),
   mkdirSync: vi.fn(),
+  chmodSync: vi.fn(),
+  renameSync: vi.fn(),
+  rmSync: vi.fn(),
 }));
 
 vi.mock("node:os", () => ({
   homedir: vi.fn(() => "/mock-home"),
 }));
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, renameSync, rmSync } from "node:fs";
 import { loadConfig, saveConfig, getConfigPath } from "../../src/utils/config.js";
 
 const mockExistsSync = vi.mocked(existsSync);
 const mockReadFileSync = vi.mocked(readFileSync);
 const mockWriteFileSync = vi.mocked(writeFileSync);
 const mockMkdirSync = vi.mocked(mkdirSync);
+const mockChmodSync = vi.mocked(chmodSync);
+const mockRenameSync = vi.mocked(renameSync);
+const mockRmSync = vi.mocked(rmSync);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -63,10 +69,14 @@ describe("config utilities", () => {
       saveConfig(config);
 
       expect(mockWriteFileSync).toHaveBeenCalledWith(
-        "/mock-home/.ace/config.yaml",
+        expect.stringMatching(/^\/mock-home\/\.ace\/config\.yaml\.\d+\.[a-f0-9]+\.tmp$/),
         YAML.stringify(config),
-        "utf-8"
+        { encoding: "utf-8", mode: 0o600, flag: "wx" }
       );
+      const tempPath = mockWriteFileSync.mock.calls[0][0] as string;
+      expect(mockChmodSync).toHaveBeenCalledWith(tempPath, 0o600);
+      expect(mockRenameSync).toHaveBeenCalledWith(tempPath, "/mock-home/.ace/config.yaml");
+      expect(mockRmSync).not.toHaveBeenCalled();
     });
 
     it("creates directory if it does not exist", () => {
@@ -76,6 +86,7 @@ describe("config utilities", () => {
 
       expect(mockMkdirSync).toHaveBeenCalledWith("/mock-home/.ace", {
         recursive: true,
+        mode: 0o700,
       });
       expect(mockWriteFileSync).toHaveBeenCalled();
     });

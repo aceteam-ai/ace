@@ -48,7 +48,11 @@ export async function startInteractive(): Promise<void> {
   if (!provider.provider) {
     console.log(chalk.bold("  Welcome! Let's get you connected to an LLM.\n"));
     const { runLoginFlow } = await import("./login.js");
-    await runLoginFlow();
+    try {
+      await runLoginFlow();
+    } catch (error) {
+      output.warn(error instanceof Error ? error.message : "Login was not completed.");
+    }
   }
 
   await mainLoop();
@@ -85,7 +89,11 @@ async function mainLoop(): Promise<void> {
         break;
       case "login": {
         const { runLoginFlow } = await import("./login.js");
-        await runLoginFlow();
+        try {
+          await runLoginFlow();
+        } catch (error) {
+          output.warn(error instanceof Error ? error.message : "Login was not completed.");
+        }
         break;
       }
       case "exit":
@@ -406,7 +414,10 @@ async function handleConfig(): Promise<void> {
   console.log(`  Default model:  ${config.default_model || chalk.dim("not set")}`);
   console.log(`  LLM provider:   ${providerLabel(provider)}`);
   console.log(
-    `  AceTeam:        ${config.fabric_api_key ? chalk.green("connected") + chalk.dim(` (${config.fabric_url})`) : chalk.dim("not connected")}`
+    `  AceTeam Fabric: ${config.fabric_api_key ? chalk.green("connected") + chalk.dim(` (${config.fabric_url})`) : chalk.dim("not connected")}`
+  );
+  console.log(
+    `  Control plane:  ${config.control_plane ? chalk.green("connected") : chalk.dim("not connected")}`
   );
 
   const edit = await confirm({
