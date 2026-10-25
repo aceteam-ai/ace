@@ -37,21 +37,30 @@ function normalizeUpstreamUrl(value: string, port: number): string {
     );
   }
 
+  const host = url.hostname.toLowerCase().replace(/\.+$/, "").replace(/^\[|\]$/g, "");
+  const loopback =
+    host === "localhost" ||
+    host === "0.0.0.0" ||
+    host === "::" ||
+    host === "::1" ||
+    /^127\./.test(host) ||
+    /^::ffff:(?:0:)?(?:127\.|7f[0-9a-f]{2}:)/.test(host);
+  if (loopback) {
+    throw new Error("Proxy upstream uses a loopback address unreachable from the container");
+  }
+
   const localHosts = new Set([
-    "localhost",
-    "127.0.0.1",
-    "[::1]",
     "aep-proxy",
     "safeclaw-proxy",
     "host.docker.internal",
     "host.containers.internal",
   ]);
   const upstreamPort = Number(url.port || (url.protocol === "https:" ? 443 : 80));
-  if (localHosts.has(url.hostname.toLowerCase()) && upstreamPort === port) {
+  if (localHosts.has(host) && upstreamPort === port) {
     throw new Error("Proxy upstream points back to the local proxy");
   }
 
-  const path = url.pathname.replace(/\/+$/, "").replace(/\/v1$/, "");
+  const path = url.pathname.replace(/\/+$/, "").replace(/\/v1$/i, "");
   return `${url.origin}${path}`;
 }
 
@@ -103,32 +112,37 @@ export function detectContainerRuntime(): "podman" | "docker" | null {
  * Check whether the SafeClaw proxy is accepting connections on the given port.
  */
 export function isProxyRunning(port: number = 8899): boolean {
-  try {
-    execFileSync(
-      "curl",
-      ["-sf", `http://localhost:${port}/dashboard/api/state`],
-      { stdio: "ignore", timeout: 2000 }
-    );
-    return true;
-  } catch {
-    return false;
+  for (const route of ["dashboard", "aep"]) {
+    try {
+      execFileSync(
+        "curl",
+        ["-sf", `http://localhost:${port}/${route}/api/state`],
+        { stdio: "ignore", timeout: 2000 }
+      );
+      return true;
+    } catch {
+      // Older cached images expose /aep; try the other route.
+    }
   }
+  return false;
 }
 
 /**
  * Pull and start the SafeClaw proxy container.
- * Forwards the selected upstream and its API key from the current environment.
+ * Forwards the selected upstream. Provider keys for a custom upstream require
+ * ACE_PROXY_FORWARD_PROVIDER_KEY=1; otherwise the client's auth is preserved.
  * Returns true if the proxy is reachable within ~15 seconds.
  */
 export function startProxy(
   runtime: "podman" | "docker",
   port: number = 8899,
-  upstream: ProxyUpstream | null = resolveProxyUpstream(process.env, port)
+  upstream?: ProxyUpstream | null
 ): boolean {
   const image = "ghcr.io/aceteam-ai/aep-proxy:latest";
   const name = "safeclaw-proxy";
 
   try {
+    const selected = upstream === undefined ? resolveProxyUpstream(process.env, port) : upstream;
     // Remove any existing stopped container with the same name
     try {
       execFileSync(runtime, ["rm", "-f", name], { stdio: "ignore" });
@@ -137,27 +151,43 @@ export function startProxy(
     }
 
     const args = ["run", "-d", "--name", name, "-p", `${port}:${port}`];
-    for (const key of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]) {
-      if (
-        process.env[key] &&
-        (!upstream || key === `${upstream.provider.toUpperCase()}_API_KEY`)
-      ) {
-        // Docker and Podman copy the variable from the host environment.
-        // Its value must not appear in process arguments.
-        args.push("-e", key);
+    let childEnv: NodeJS.ProcessEnv | undefined;
+    if (selected) {
+      if (process.env.ACE_PROXY_FORWARD_PROVIDER_KEY === "1") {
+        const sourceKey = `${selected.provider.toUpperCase()}_API_KEY`;
+        if (process.env[sourceKey]) {
+          // The current image chooses its startup key by a URL substring. For
+          // custom Anthropic hosts without that substring, provide the chosen
+          // key under the name it reads. /v1/messages still uses x-api-key.
+          const imageKey =
+            selected.provider === "anthropic" &&
+            !selected.target.toLowerCase().includes("anthropic")
+              ? "OPENAI_API_KEY"
+              : sourceKey;
+          if (imageKey !== sourceKey) {
+            childEnv = { ...process.env, [imageKey]: process.env[sourceKey] };
+          }
+          // Docker/Podman copy the value from the child environment. It does
+          // not appear in process arguments.
+          args.push("-e", imageKey);
+        }
+      }
+    } else {
+      for (const key of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]) {
+        if (process.env[key]) args.push("-e", key);
       }
     }
     args.push(image);
-    if (upstream) {
+    if (selected) {
       // The image's entrypoint is aceteam-aep. Supplying arguments replaces
       // its default CMD, so repeat the port and bind address here.
       args.push(
         "proxy", "--port", String(port), "--host", "0.0.0.0",
-        "--target", upstream.target
+        "--target", selected.target
       );
     }
 
-    execFileSync(runtime, args, { stdio: "pipe" });
+    execFileSync(runtime, args, { stdio: "pipe", ...(childEnv ? { env: childEnv } : {}) });
 
     // Poll until proxy is ready (up to ~15 s)
     for (let i = 0; i < 30; i++) {

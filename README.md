@@ -181,7 +181,8 @@ Show connected node load metrics.
 
 Set the upstream URL before running `ace init`. The URL must be reachable from
 the proxy container. Use a node hostname or container-accessible host address,
-not `localhost` on the host machine. The proxy accepts one upstream at a time.
+not a loopback address such as `localhost` or `127.0.0.1`. The proxy accepts
+one upstream at a time.
 
 ```bash
 export UPSTREAM_OPENAI_BASE_URL=http://node.internal:8000/v1
@@ -203,9 +204,17 @@ it to the container. A custom Anthropic endpoint can use
 For compatibility, `ace init` also accepts `OPENAI_BASE_URL` or
 `ANTHROPIC_BASE_URL` as the upstream before the agent is pointed at the proxy.
 The `UPSTREAM_` names take precedence, avoiding a loop when the agent's base
-URL already points to `localhost:8899`. Set only one upstream provider URL for
-each proxy instance. An existing proxy keeps its current target until it is
+URL already points to `localhost:8899`. If a standard base URL points back to
+the proxy or both standard base URLs are set, `ace init` warns and uses the
+default proxy target. Invalid or competing `UPSTREAM_` URLs stop proxy startup
+until corrected. An existing proxy keeps its current target until it is
 stopped and started again.
+
+For a custom upstream, the proxy forwards the coding agent's authentication
+header by default. To have the proxy use the provider key from the host
+environment instead, set `ACE_PROXY_FORWARD_PROVIDER_KEY=1` before `ace init`.
+Only the selected provider's key is passed into the container, and its value
+is not included in the container command arguments.
 
 If automatic startup fails, the equivalent manual container command for the
 example node is:

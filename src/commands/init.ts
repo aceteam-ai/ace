@@ -24,11 +24,50 @@ import {
   isProxyRunning,
   resolveProxyUpstream,
   startProxy,
+  type ProxyUpstream,
 } from "../utils/proxy.js";
 import { DEMOS } from "../demos/index.js";
 import * as output from "../utils/output.js";
 
 const DEFAULT_VENV_DIR = join(homedir(), ".ace", "venv");
+
+/** Inspect the live proxy before interpreting base URLs in the agent shell. */
+export function inspectProxyForInit(
+  env: NodeJS.ProcessEnv = process.env,
+  port: number = 8899,
+  probes: {
+    isRunning: (port: number) => boolean;
+    resolve: (env: NodeJS.ProcessEnv, port: number) => ProxyUpstream | null;
+  } = { isRunning: isProxyRunning, resolve: resolveProxyUpstream }
+): {
+  alreadyRunning: boolean;
+  upstream: ProxyUpstream | null;
+  warning: string | null;
+  error: string | null;
+} {
+  if (probes.isRunning(port)) {
+    return { alreadyRunning: true, upstream: null, warning: null, error: null };
+  }
+  try {
+    return {
+      alreadyRunning: false,
+      upstream: probes.resolve(env, port),
+      warning: null,
+      error: null,
+    };
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    const explicit = Boolean(
+      env.UPSTREAM_OPENAI_BASE_URL?.trim() || env.UPSTREAM_ANTHROPIC_BASE_URL?.trim()
+    );
+    return {
+      alreadyRunning: false,
+      upstream: null,
+      warning: explicit ? null : `Ignoring agent base URL for proxy target: ${message}`,
+      error: explicit ? message : null,
+    };
+  }
+}
 
 // ── Exported setup functions (reusable by TUI) ──────────────
 
@@ -252,21 +291,16 @@ export const initCommand = new Command("init")
     console.log(chalk.bold("\n6. SafeClaw Proxy"));
 
     const containerRuntime = detectContainerRuntime();
-    let upstream: ReturnType<typeof resolveProxyUpstream> = null;
-    let upstreamError: string | null = null;
-    try {
-      upstream = resolveProxyUpstream();
-    } catch (error) {
-      upstreamError = error instanceof Error ? error.message : String(error);
-    }
+    const inspection = containerRuntime ? inspectProxyForInit() : null;
+    const upstream = inspection?.upstream ?? null;
+    if (inspection?.warning) output.warn(inspection.warning);
 
-    if (upstreamError) {
-      output.warn(`SafeClaw proxy not started: ${upstreamError}`);
+    if (inspection?.error) {
+      output.warn(`SafeClaw proxy not started: ${inspection.error}`);
     } else if (containerRuntime) {
-      const alreadyRunning = isProxyRunning();
-      if (alreadyRunning) {
+      if (inspection?.alreadyRunning) {
         ora().succeed("SafeClaw proxy already running on port 8899");
-        if (upstream) {
+        if (process.env.UPSTREAM_OPENAI_BASE_URL?.trim() || process.env.UPSTREAM_ANTHROPIC_BASE_URL?.trim()) {
           output.warn(
             "An existing proxy is running. Stop it and run ace init again to apply the upstream URL."
           );
@@ -287,7 +321,7 @@ export const initCommand = new Command("init")
           const started = startProxy(containerRuntime, 8899, upstream);
           if (started) {
             spinner.succeed(
-              "SafeClaw proxy running. Dashboard: http://localhost:8899/dashboard/"
+              "SafeClaw proxy running. Dashboard: http://localhost:8899/dashboard/ (older images: /aep/)"
             );
             config.proxy_enabled = true;
             config.proxy_url = "http://localhost:8899";
