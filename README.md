@@ -184,6 +184,12 @@ the proxy container. Use a node hostname or container-accessible host address,
 not a loopback address such as `localhost` or `127.0.0.1`. The proxy accepts
 one upstream at a time.
 
+For a model server on your own machine, including Ollama or LiteLLM, use
+`http://host.docker.internal:<port>/v1` as the upstream. On Linux, Docker needs
+`--add-host=host.docker.internal:host-gateway`; `ace init` adds that mapping
+when it starts a Docker proxy for this host. Use the same option in a manual
+`docker run` command. Podman can use `host.containers.internal` instead.
+
 ```bash
 export UPSTREAM_OPENAI_BASE_URL=http://node.internal:8000/v1
 ace init
@@ -213,8 +219,12 @@ stopped and started again.
 For a custom upstream, the proxy forwards the coding agent's authentication
 header by default. To have the proxy use the provider key from the host
 environment instead, set `ACE_PROXY_FORWARD_PROVIDER_KEY=1` before `ace init`.
-Only the selected provider's key is passed into the container, and its value
-is not included in the container command arguments.
+The selected provider's key is passed as `AEP_TARGET_API_KEY` and, for
+compatibility with older images, under the provider variable the image reads.
+The value is not included in the container command arguments. When a standard
+`OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL` points exactly to that provider's
+official API host, `ace init` forwards its matching key automatically. It
+prints the selected target and source variable before startup.
 
 If automatic startup fails, the equivalent manual container command for the
 example node is:

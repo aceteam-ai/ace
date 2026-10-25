@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { inspectProxyForInit } from "../../src/commands/init.js";
-import { resolveProxyUpstream } from "../../src/utils/proxy.js";
+import { inspectProxyForInit, resolveProxyUpstream } from "../../src/utils/proxy.js";
 
 describe("ace init proxy inspection", () => {
   it("checks an existing proxy before resolving agent base URLs", () => {
@@ -55,6 +54,7 @@ describe("ace init proxy inspection", () => {
     );
     expect(result.upstream).toEqual({
       target: "http://host.docker.internal:11434", provider: "openai",
+      sourceEnv: "UPSTREAM_OPENAI_BASE_URL",
     });
     expect(result.warning).toBeNull();
     expect(result.error).toBeNull();

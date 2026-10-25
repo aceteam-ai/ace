@@ -21,53 +21,13 @@ import { confirm } from "@inquirer/prompts";
 import { detectProvider, providerLabel } from "../utils/provider-detect.js";
 import {
   detectContainerRuntime,
-  isProxyRunning,
-  resolveProxyUpstream,
+  inspectProxyForInit,
   startProxy,
-  type ProxyUpstream,
 } from "../utils/proxy.js";
 import { DEMOS } from "../demos/index.js";
 import * as output from "../utils/output.js";
 
 const DEFAULT_VENV_DIR = join(homedir(), ".ace", "venv");
-
-/** Inspect the live proxy before interpreting base URLs in the agent shell. */
-export function inspectProxyForInit(
-  env: NodeJS.ProcessEnv = process.env,
-  port: number = 8899,
-  probes: {
-    isRunning: (port: number) => boolean;
-    resolve: (env: NodeJS.ProcessEnv, port: number) => ProxyUpstream | null;
-  } = { isRunning: isProxyRunning, resolve: resolveProxyUpstream }
-): {
-  alreadyRunning: boolean;
-  upstream: ProxyUpstream | null;
-  warning: string | null;
-  error: string | null;
-} {
-  if (probes.isRunning(port)) {
-    return { alreadyRunning: true, upstream: null, warning: null, error: null };
-  }
-  try {
-    return {
-      alreadyRunning: false,
-      upstream: probes.resolve(env, port),
-      warning: null,
-      error: null,
-    };
-  } catch (cause) {
-    const message = cause instanceof Error ? cause.message : String(cause);
-    const explicit = Boolean(
-      env.UPSTREAM_OPENAI_BASE_URL?.trim() || env.UPSTREAM_ANTHROPIC_BASE_URL?.trim()
-    );
-    return {
-      alreadyRunning: false,
-      upstream: null,
-      warning: explicit ? null : `Ignoring agent base URL for proxy target: ${message}`,
-      error: explicit ? message : null,
-    };
-  }
-}
 
 // ── Exported setup functions (reusable by TUI) ──────────────
 
@@ -294,6 +254,9 @@ export const initCommand = new Command("init")
     const inspection = containerRuntime ? inspectProxyForInit() : null;
     const upstream = inspection?.upstream ?? null;
     if (inspection?.warning) output.warn(inspection.warning);
+    if (upstream) {
+      output.info(`Proxy upstream host: ${new URL(upstream.target).origin} (from ${upstream.sourceEnv})`);
+    }
 
     if (inspection?.error) {
       output.warn(`SafeClaw proxy not started: ${inspection.error}`);

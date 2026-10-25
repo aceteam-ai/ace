@@ -24,6 +24,7 @@ beforeEach(() => {
     "ANTHROPIC_BASE_URL",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
+    "AEP_TARGET_API_KEY",
     "ACE_PROXY_FORWARD_PROVIDER_KEY",
   ]) {
     delete process.env[key];
@@ -39,25 +40,25 @@ describe("resolveProxyUpstream", () => {
   it("uses the explicit OpenAI upstream and removes the client /v1 suffix", () => {
     expect(resolveProxyUpstream({
       UPSTREAM_OPENAI_BASE_URL: "http://node.internal:8000/api/v1/",
-    })).toEqual({ target: "http://node.internal:8000/api", provider: "openai" });
+    })).toEqual({ target: "http://node.internal:8000/api", provider: "openai", sourceEnv: "UPSTREAM_OPENAI_BASE_URL" });
   });
 
   it("removes a case-insensitive /V1 suffix", () => {
     expect(resolveProxyUpstream({ UPSTREAM_OPENAI_BASE_URL: "https://node.internal/api/V1/" }))
-      .toEqual({ target: "https://node.internal/api", provider: "openai" });
+      .toEqual({ target: "https://node.internal/api", provider: "openai", sourceEnv: "UPSTREAM_OPENAI_BASE_URL" });
   });
 
   it("accepts an Anthropic base URL when no explicit upstream is set", () => {
     expect(resolveProxyUpstream({
       ANTHROPIC_BASE_URL: "https://anthropic.internal/",
-    })).toEqual({ target: "https://anthropic.internal", provider: "anthropic" });
+    })).toEqual({ target: "https://anthropic.internal", provider: "anthropic", sourceEnv: "ANTHROPIC_BASE_URL" });
   });
 
   it("prefers an explicit upstream over an agent URL pointing at the proxy", () => {
     expect(resolveProxyUpstream({
       UPSTREAM_OPENAI_BASE_URL: "http://node.internal:8000/v1",
       OPENAI_BASE_URL: "http://localhost:8899/v1",
-    })).toEqual({ target: "http://node.internal:8000", provider: "openai" });
+    })).toEqual({ target: "http://node.internal:8000", provider: "openai", sourceEnv: "UPSTREAM_OPENAI_BASE_URL" });
   });
 
   it("returns null when no upstream is configured", () => {
@@ -167,9 +168,51 @@ describe("proxy container startup", () => {
       ([command, args]) => command === "docker" && args?.[0] === "run"
     );
     expect(run?.[1]).toContain("OPENAI_API_KEY");
+    expect(run?.[1]).toContain("AEP_TARGET_API_KEY");
     expect(run?.[1]).not.toContain("ANTHROPIC_API_KEY");
     expect(run?.[2]?.env?.OPENAI_API_KEY).toBe("test-anthropic-key");
+    expect(run?.[2]?.env?.AEP_TARGET_API_KEY).toBe("test-anthropic-key");
     expect(JSON.stringify(run?.[1])).not.toContain("test-anthropic-key");
+  });
+
+  it.each([
+    ["OPENAI_BASE_URL", "https://api.openai.com/v1", "OPENAI_API_KEY"],
+    ["ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1", "ANTHROPIC_API_KEY"],
+  ])("forwards the %s key for its official host", (baseKey, url, apiKey) => {
+    process.env[apiKey] = "test-official-key";
+    const upstream = resolveProxyUpstream({ [baseKey]: url });
+    expect(startProxy("docker", 8899, upstream)).toBe(true);
+    const run = mockExecFileSync.mock.calls.find(
+      ([command, args]) => command === "docker" && args?.[0] === "run"
+    );
+    expect(run?.[1]).toContain(apiKey);
+    expect(run?.[1]).toContain("AEP_TARGET_API_KEY");
+    expect(run?.[2]?.env?.AEP_TARGET_API_KEY).toBe("test-official-key");
+    expect(JSON.stringify(run?.[1])).not.toContain("test-official-key");
+  });
+
+  it("does not forward a key to a lookalike official host", () => {
+    process.env.OPENAI_API_KEY = "test-official-key";
+    const upstream = resolveProxyUpstream({ OPENAI_BASE_URL: "https://api.openai.com.evil.test/v1" });
+    expect(startProxy("docker", 8899, upstream)).toBe(true);
+    const run = mockExecFileSync.mock.calls.find(
+      ([command, args]) => command === "docker" && args?.[0] === "run"
+    );
+    expect(run?.[1]).not.toContain("OPENAI_API_KEY");
+    expect(run?.[1]).not.toContain("AEP_TARGET_API_KEY");
+  });
+
+  it("adds the Linux Docker gateway mapping for a host-local upstream", () => {
+    const upstream = resolveProxyUpstream({
+      UPSTREAM_OPENAI_BASE_URL: "http://host.docker.internal:11434/v1",
+    });
+    expect(startProxy("docker", 8899, upstream)).toBe(true);
+    const run = mockExecFileSync.mock.calls.find(
+      ([command, args]) => command === "docker" && args?.[0] === "run"
+    );
+    if (process.platform === "linux") {
+      expect(run?.[1]).toContain("--add-host=host.docker.internal:host-gateway");
+    }
   });
 
   it("catches default upstream resolution errors inside startup", () => {

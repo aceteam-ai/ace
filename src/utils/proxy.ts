@@ -10,6 +10,45 @@ export interface ProxyConfig {
 export interface ProxyUpstream {
   target: string;
   provider: "openai" | "anthropic";
+  sourceEnv: string;
+}
+
+/** Inspect the live proxy before interpreting base URLs in the agent shell. */
+export function inspectProxyForInit(
+  env: NodeJS.ProcessEnv = process.env,
+  port: number = 8899,
+  probes: {
+    isRunning: (port: number) => boolean;
+    resolve: (env: NodeJS.ProcessEnv, port: number) => ProxyUpstream | null;
+  } = { isRunning: isProxyRunning, resolve: resolveProxyUpstream }
+): {
+  alreadyRunning: boolean;
+  upstream: ProxyUpstream | null;
+  warning: string | null;
+  error: string | null;
+} {
+  if (probes.isRunning(port)) {
+    return { alreadyRunning: true, upstream: null, warning: null, error: null };
+  }
+  try {
+    return {
+      alreadyRunning: false,
+      upstream: probes.resolve(env, port),
+      warning: null,
+      error: null,
+    };
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    const explicit = Boolean(
+      env.UPSTREAM_OPENAI_BASE_URL?.trim() || env.UPSTREAM_ANTHROPIC_BASE_URL?.trim()
+    );
+    return {
+      alreadyRunning: false,
+      upstream: null,
+      warning: explicit ? null : `Ignoring agent base URL for proxy target: ${message}`,
+      error: explicit ? message : null,
+    };
+  }
 }
 
 /**
@@ -90,7 +129,7 @@ export function resolveProxyUpstream(
   if (!candidates.length) return null;
 
   const [key, provider] = candidates[0];
-  return { target: normalizeUpstreamUrl(env[key]!, port), provider };
+  return { target: normalizeUpstreamUrl(env[key]!, port), provider, sourceEnv: key };
 }
 
 /**
@@ -153,7 +192,14 @@ export function startProxy(
     const args = ["run", "-d", "--name", name, "-p", `${port}:${port}`];
     let childEnv: NodeJS.ProcessEnv | undefined;
     if (selected) {
-      if (process.env.ACE_PROXY_FORWARD_PROVIDER_KEY === "1") {
+      const host = new URL(selected.target).hostname.toLowerCase().replace(/\.+$/, "");
+      if (runtime === "docker" && process.platform === "linux" && host === "host.docker.internal") {
+        args.push("--add-host=host.docker.internal:host-gateway");
+      }
+      const officialHost = selected.provider === "openai" ? "api.openai.com" : "api.anthropic.com";
+      const standardOfficial =
+        selected.sourceEnv === `${selected.provider.toUpperCase()}_BASE_URL` && host === officialHost;
+      if (process.env.ACE_PROXY_FORWARD_PROVIDER_KEY === "1" || standardOfficial) {
         const sourceKey = `${selected.provider.toUpperCase()}_API_KEY`;
         if (process.env[sourceKey]) {
           // The current image chooses its startup key by a URL substring. For
@@ -164,12 +210,14 @@ export function startProxy(
             !selected.target.toLowerCase().includes("anthropic")
               ? "OPENAI_API_KEY"
               : sourceKey;
-          if (imageKey !== sourceKey) {
-            childEnv = { ...process.env, [imageKey]: process.env[sourceKey] };
-          }
+          childEnv = {
+            ...process.env,
+            [imageKey]: process.env[sourceKey],
+            AEP_TARGET_API_KEY: process.env[sourceKey],
+          };
           // Docker/Podman copy the value from the child environment. It does
           // not appear in process arguments.
-          args.push("-e", imageKey);
+          args.push("-e", imageKey, "-e", "AEP_TARGET_API_KEY");
         }
       }
     } else {
