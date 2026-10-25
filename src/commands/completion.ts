@@ -9,17 +9,20 @@ const scripts: Record<Shell, string> = {
 __ace_cli_complete() {
   local current="\${COMP_WORDS[COMP_CWORD]}"
   local matches
-  matches=$(command ace __complete -- "\${COMP_WORDS[@]:1:COMP_CWORD}" "$current") || return
+  matches=$(command ace __complete -- "\${COMP_WORDS[@]:1:COMP_CWORD-1}" "$current") || return
   COMPREPLY=( $(compgen -W "$matches" -- "$current") )
 }
-complete -F __ace_cli_complete ace`,
-  zsh: `# Add to ~/.zshrc: eval "$(ace completion zsh)"
+complete -o default -F __ace_cli_complete ace`,
+  zsh: `# Add to ~/.zshrc after compinit: eval "$(ace completion zsh)"
 __ace_cli_complete() {
   local -a args matches
-  args=("\${words[@]}")
-  shift args
+  args=("\${(@)words[2,CURRENT]}")
   matches=("\${(@f)$(command ace __complete -- "\${args[@]}")}")
-  compadd -- "\${matches[@]}"
+  if (( \${#matches} )) && [[ -n \${matches[1]} ]]; then
+    compadd -- "\${matches[@]}"
+  else
+    _files
+  fi
 }
 compdef __ace_cli_complete ace`,
   fish: `# Save to ~/.config/fish/completions/ace.fish: ace completion fish > ~/.config/fish/completions/ace.fish

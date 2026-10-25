@@ -89,6 +89,8 @@ eval "$(ace completion zsh)"  # ~/.zshrc
 ace completion fish > ~/.config/fish/completions/ace.fish
 ```
 
+In Zsh, run `compinit` before the `eval` line so `compdef` is available.
+
 Completion suggests commands and flags from the installed CLI. Use
 `ace mcp --list` to discover live tool names.
 
