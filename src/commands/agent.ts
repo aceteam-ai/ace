@@ -10,9 +10,67 @@ interface AgentEntry {
 }
 
 function primaryToolValue(result: McpResult): unknown {
-  if (result.structuredContent !== undefined) return unwrapToolResult(result);
   const first = result.content?.find((block) => block.type === "text");
-  return first ? unwrapToolResult({ content: [first] }) : unwrapToolResult(result);
+  return first
+    ? carrierValue(unwrapToolResult({ content: [first] }))
+    : unwrapToolResult(result);
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function carrierValue(value: unknown): unknown {
+  return record(value) && "acting_org_id" in value && "result" in value
+    ? value.result
+    : value;
+}
+
+function withoutTransportMetadata(value: unknown): unknown {
+  if (!record(value)) return value;
+  return Object.fromEntries(Object.entries(value).filter(([key]) =>
+    !["_receipt", "acting_org_id", "acting_org_name", "non_home_org"].includes(key),
+  ));
+}
+
+function agentResponse(result: McpResult): unknown {
+  const first = result.content?.find((block) => block.type === "text");
+  if (first) {
+    const text = first.text ?? "";
+    // Only parse the known structured carriers. An agent's "42", "null", or
+    // JSON-looking answer is still text, including under --json.
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (record(parsed) && ("acting_org_id" in parsed && "result" in parsed ||
+          typeof parsed.status === "string")) return withoutTransportMetadata(carrierValue(parsed));
+    } catch {
+      // Free-form agent replies are not required to be JSON.
+    }
+    return text;
+  }
+  return withoutTransportMetadata(carrierValue(result.structuredContent));
+}
+
+function checkedAgentResponse(value: unknown): unknown {
+  if (value === undefined) throw new CliError(4, "The control plane returned no agent response.");
+  if (record(value) && typeof value.status === "string" &&
+      ["blocked", "error", "denied"].includes(value.status.toLowerCase())) {
+    throw new CliError(4, `Agent turn ${value.status.toLowerCase()}.`);
+  }
+  if (typeof value === "string" && (
+    /^CrossOrgPermissionError\b/i.test(value) ||
+    value.startsWith("You are not a member of that organization") ||
+    value.startsWith("This connection has not been granted cross-org access") ||
+    value.startsWith("Agent not found") ||
+    value.startsWith("Insufficient ACET balance") ||
+    value.startsWith("ACET debit denied") ||
+    value.startsWith("Could not verify your organization's ACET balance") ||
+    value.startsWith("Error chatting with agent:")
+  )) {
+    throw new CliError(4, value.startsWith("Error chatting with agent:")
+      ? "The agent turn failed." : value);
+  }
+  return value;
 }
 
 function agentEntries(value: unknown): AgentEntry[] {
@@ -87,11 +145,11 @@ askCommand.action(async (selector: string, message: string) => {
           agentEntries(primaryToolValue(await client.callTool("agent_peers", { kind: "agent" }))),
           selector,
         );
-    const response = primaryToolValue(await client.callTool("chat_with_agent", {
+    const response = checkedAgentResponse(agentResponse(await client.callTool("chat_with_agent", {
       agent_id: agentId,
       message,
       expected_org_id: organizationId,
-    }));
+    })));
     printValue({ agent_id: agentId, response }, flags, () =>
       typeof response === "string" ? response : JSON.stringify(response, null, 2),
     );
