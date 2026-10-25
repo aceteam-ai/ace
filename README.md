@@ -177,6 +177,64 @@ Show connected node load metrics.
 
 ## Using Local LLMs (Ollama, vLLM, etc.)
 
+### Observe an OpenAI-compatible node through the AEP proxy
+
+Set the upstream URL before running `ace init`. The URL must be reachable from
+the proxy container. Use a node hostname or container-accessible host address,
+not a loopback address such as `localhost` or `127.0.0.1`. The proxy accepts
+one upstream at a time.
+
+For a model server on your own machine, including Ollama or LiteLLM, use
+`http://host.docker.internal:<port>/v1` as the upstream. On Linux, Docker needs
+`--add-host=host.docker.internal:host-gateway`; `ace init` adds that mapping
+when it starts a Docker proxy for this host. Use the same option in a manual
+`docker run` command. Podman can use `host.containers.internal` instead.
+
+```bash
+export UPSTREAM_OPENAI_BASE_URL=http://node.internal:8000/v1
+ace init
+```
+
+Then point the coding agent at the local proxy:
+
+```bash
+export OPENAI_BASE_URL=http://localhost:8899/v1
+```
+
+Requests sent through that URL appear in the local AEP dashboard at
+`http://localhost:8899/dashboard/`. The proxy appends the request path, so
+`ace init` removes a trailing `/v1` from the upstream base URL before passing
+it to the container. A custom Anthropic endpoint can use
+`UPSTREAM_ANTHROPIC_BASE_URL` and an agent-side `ANTHROPIC_BASE_URL` instead.
+
+For compatibility, `ace init` also accepts `OPENAI_BASE_URL` or
+`ANTHROPIC_BASE_URL` as the upstream before the agent is pointed at the proxy.
+The `UPSTREAM_` names take precedence, avoiding a loop when the agent's base
+URL already points to `localhost:8899`. If a standard base URL points back to
+the proxy or both standard base URLs are set, `ace init` warns and uses the
+default proxy target. Invalid or competing `UPSTREAM_` URLs stop proxy startup
+until corrected. An existing proxy keeps its current target until it is
+stopped and started again.
+
+For a custom upstream, the proxy forwards the coding agent's authentication
+header by default. To have the proxy use the provider key from the host
+environment instead, set `ACE_PROXY_FORWARD_PROVIDER_KEY=1` before `ace init`.
+The selected provider's key is passed as `AEP_TARGET_API_KEY` and, for
+compatibility with older images, under the provider variable the image reads.
+The value is not included in the container command arguments. When a standard
+`OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL` points exactly to that provider's
+official API host, `ace init` forwards its matching key automatically. It
+prints the selected target and source variable before startup.
+
+If automatic startup fails, the equivalent manual container command for the
+example node is:
+
+```bash
+docker run -d --name safeclaw-proxy -p 8899:8899 \
+  ghcr.io/aceteam-ai/aep-proxy:latest \
+  proxy --port 8899 --host 0.0.0.0 --target http://node.internal:8000
+```
+
 Workflows use [litellm](https://docs.litellm.ai/) under the hood, which supports 100+ LLM providers — including local model servers. No API key needed for local models.
 
 ### Ollama
