@@ -5,6 +5,7 @@ import { fabricCommand } from "./commands/fabric.js";
 import { runCommand } from "./commands/run.js";
 import { loginCommand, logoutCommand } from "./commands/login.js";
 import { mcpCommand, orgCommand, whoamiCommand } from "./commands/control-plane.js";
+import { addCompletionCommands } from "./commands/completion.js";
 import { beginLegacyOutput, finishLegacyOutput } from "./utils/legacy-output.js";
 import { CliError } from "./utils/control-plane.js";
 
@@ -50,6 +51,7 @@ if (process.argv.length === 2 && process.stdin.isTTY) {
   program.addCommand(whoamiCommand);
   program.addCommand(orgCommand);
   program.addCommand(mcpCommand);
+  addCompletionCommands(program);
 
   addOutputOptions(program);
   configureErrorHandling(program);

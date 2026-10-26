@@ -80,6 +80,20 @@ to use a different config directory. A custom `--mcp-url` requires HTTPS,
 except for a local HTTP server on `localhost`, `127.0.0.1`, or `::1`.
 Commands that prompt for input require normal terminal output.
 
+Shell completion is available for Bash, Zsh, and Fish. Add the matching line
+to your shell setup, or save the Fish script to its completion directory:
+
+```bash
+eval "$(ace completion bash)" # ~/.bashrc
+eval "$(ace completion zsh)"  # ~/.zshrc
+ace completion fish > ~/.config/fish/completions/ace.fish
+```
+
+In Zsh, run `compinit` before the `eval` line so `compdef` is available.
+
+Completion suggests commands and flags from the installed CLI. Use
+`ace mcp --list` to discover live tool names.
+
 ## How It Works
 
 ```
