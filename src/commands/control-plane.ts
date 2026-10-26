@@ -103,6 +103,23 @@ function parseArgValue(raw: string, schema?: unknown): unknown {
   }
 }
 
+const MAX_STDIN_JSON_BYTES = 1_048_576;
+
+export async function readToolJsonStdin(input: AsyncIterable<string | Buffer>): Promise<string> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of input) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.length;
+    if (bytes > MAX_STDIN_JSON_BYTES) {
+      throw new CliError(2, "The JSON input exceeds 1 MiB.");
+    }
+    chunks.push(buffer);
+  }
+  if (bytes === 0) throw new CliError(2, "Standard input is empty.");
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 export function parseToolArgs(
   jsonOption: string | boolean | undefined,
   args: string[],
@@ -144,7 +161,7 @@ export const mcpCommand = new Command("mcp")
   .argument("[tool]", "Tool name")
   .option("--list [query]", "List tools, optionally by search query")
   .option("--schema <tool>", "Show a tool's live input schema")
-  .option("--json [args]", "Output JSON, optionally supplying a JSON argument object")
+  .option("--json [args]", "Output JSON; supply an object or - to read one from stdin")
   .option("--arg <key=value>", "Set one tool argument", (value, previous: string[]) => [...previous, value], [])
   .option("--quiet", "Suppress successful output");
 
@@ -177,7 +194,11 @@ mcpCommand.action(async (name: string | undefined) => {
     }
     if (!name) throw new CliError(2, "Supply a tool name, --list, or --schema.");
     const tool = await client.getTool(name);
-    const args = parseToolArgs(options.json, options.arg, tool.inputSchema);
+    if (options.json === "-" && process.stdin.isTTY) {
+      throw new CliError(2, "Pipe a JSON object into --json -.");
+    }
+    const jsonArgs = options.json === "-" ? await readToolJsonStdin(process.stdin) : options.json;
+    const args = parseToolArgs(jsonArgs, options.arg, tool.inputSchema);
     const properties = tool.inputSchema.properties;
     if (properties && typeof properties === "object" && !Array.isArray(properties) &&
         "expected_org_id" in properties && !Object.hasOwn(args, "expected_org_id")) {

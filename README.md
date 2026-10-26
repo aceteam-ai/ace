@@ -56,6 +56,7 @@ ace org use "My organization"
 ace mcp --list forge
 ace mcp --schema forge_pr_list --json
 ace mcp forge_pr_list --json '{"owner":"aceteam-ai","repo":"ace"}'
+printf '%s\n' '{"owner":"aceteam-ai","repo":"ace"}' | ace mcp forge_pr_list --json -
 ace mcp forge_pr_list --arg owner=aceteam-ai --arg repo=ace
 ace logout
 
@@ -71,7 +72,8 @@ with an error so a script does not mistake the control-plane session for ready.
 
 `--json` emits machine-readable output on every command, and `--quiet`
 suppresses successful output. For `ace mcp`, `--json` alone selects JSON
-output; `--json '{...}'` also supplies tool arguments. Invalid input exits
+output; `--json '{...}'` supplies tool arguments, and `--json -` reads a JSON
+object from standard input (up to 1 MiB). Invalid input exits
 with status 2, authentication failures with 3, and control-plane failures
 with 4. The config file is restricted to its owner. Set `ACE_CONFIG_DIR`
 to use a different config directory. A custom `--mcp-url` requires HTTPS,
