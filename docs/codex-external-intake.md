@@ -65,6 +65,16 @@ evidence with `duplicate: true` and never writes again, including after an
 unknown result. Durable duplicate suppression across restart belongs to the #18
 consumer journal; this adapter intentionally does not persist delivery records.
 
+Each connection accepts at most 128 distinct deliveries and retains at most
+8 MiB of encoded output, including source fields and delivery IDs. The existing
+512 KiB per-delivery limit also applies. Records are never evicted during that
+connection: processed, unsupported and unknown IDs still return their previous
+evidence without resubmitting. Once either aggregate limit is reached, new IDs
+are rejected before any event, turn reservation or native write. The consumer
+must retain new deliveries for manual review. Reconnecting does not make an
+unknown delivery safe to replay; durable restart suppression remains the #18
+consumer journal's responsibility.
+
 Transport failure after submission is surfaced as `unknown` with
 `retrySafe: false` and terminates the local connection under the existing
 fail-closed protocol rules. A native method/parameter rejection is

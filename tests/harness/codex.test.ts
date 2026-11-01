@@ -120,6 +120,31 @@ async function resumeRig(options: Parameters<typeof rig>[0] = {}) {
   return { ...instance, get child() { return instance.child; }, command, store, root, workspace: directory };
 }
 
+async function startedRig(options: Parameters<typeof rig>[0] = {}) {
+  const instance = rig(options);
+  const started = await instance.adapter.start(startCommand);
+  if (started.status !== "ok") throw new Error("Synthetic start failed");
+  const session = started.value;
+  disposals.push(() => instance.adapter.dispose({ type: "session.dispose", session }));
+  return { ...instance, child: instance.child, session };
+}
+
+async function completeExternal(instance: Awaited<ReturnType<typeof startedRig>>, deliveryId: string, content: string) {
+  const delivered = await instance.adapter.deliverExternalOutput({
+    type: "session.external_output", session: instance.session, deliveryId,
+    source: { kind: "peer", id: "peer-bound" }, content,
+  });
+  expect(delivered.status).toBe("ok");
+  if (delivered.status !== "ok") throw new Error("Synthetic delivery failed");
+  const nativeTurnId = delivered.value.nativeTurnId;
+  const output = instance.child.messages.at(-1)!.params.toolOutput.output;
+  instance.child.notify("item/completed", { threadId, turnId: nativeTurnId, item: {
+    id: `item-${deliveryId}`, type: "functionCallOutput", name: "peer_message",
+    namespace: "aceteam.external", output,
+  } });
+  instance.child.notify("turn/completed", { threadId, turn: { ...turn("completed"), id: nativeTurnId } });
+}
+
 async function running(options: Parameters<typeof rig>[0] = {}) {
   const instance = rig(options);
   const result = await instance.adapter.start(startCommand);
@@ -220,6 +245,51 @@ describe("Codex native thread adapter", () => {
       nativeTurnId: turnId, nativeItemId: "external-item-1", retrySafe: false, duplicate: true,
     } });
     expect(instance.child.messages.filter((message) => message.method === "turn/start")).toHaveLength(before);
+  });
+
+  it("bounds retained delivery IDs without replaying processed duplicates at capacity", async () => {
+    const instance = await startedRig();
+    for (let i = 0; i < 128; i++) {
+      await completeExternal(instance, `bounded-${i}`, "Synthetic handoff");
+    }
+    const before = instance.child.messages.length;
+    expect(await instance.adapter.deliverExternalOutput({
+      type: "session.external_output", session: instance.session, deliveryId: "over-limit",
+      source: { kind: "peer", id: "peer-bound" }, content: "New content",
+    })).toMatchObject({ status: "rejected", code: "invalid_external_output" });
+    expect(await instance.adapter.deliverExternalOutput({
+      type: "session.external_output", session: instance.session, deliveryId: "bounded-0",
+      source: { kind: "peer", id: "peer-bound" }, content: "Changed duplicate content",
+    })).toMatchObject({ status: "ok", value: { status: "processed", duplicate: true, retrySafe: false } });
+    expect(instance.child.messages).toHaveLength(before);
+  });
+
+  it("bounds aggregate encoded bytes before the delivery count limit", async () => {
+    const instance = await startedRig();
+    const content = "x".repeat(512 * 1024 - 300);
+    for (let i = 0; i < 16; i++) await completeExternal(instance, `large-${i}`, content);
+    const before = instance.child.messages.length;
+    expect(await instance.adapter.deliverExternalOutput({
+      type: "session.external_output", session: instance.session, deliveryId: "large-over-limit",
+      source: { kind: "peer", id: "peer-bound" }, content,
+    })).toMatchObject({ status: "rejected", code: "invalid_external_output" });
+    expect(instance.child.messages).toHaveLength(before);
+    expect(await instance.adapter.sendInput({ type: "session.input", session: instance.session, input: "Still usable" })).toMatchObject({ status: "ok" });
+  });
+
+  it("retains an unknown delivery at the count limit without replay", async () => {
+    const instance = await startedRig({ requestTimeoutMs: 20, handle: (_child, request) =>
+      request.method === "turn/start" && Boolean(request.params.toolOutput) &&
+      JSON.parse(request.params.toolOutput.output).deliveryId === "unknown-at-limit" });
+    for (let i = 0; i < 127; i++) await completeExternal(instance, `known-${i}`, "Synthetic handoff");
+    const command = {
+      type: "session.external_output" as const, session: instance.session, deliveryId: "unknown-at-limit",
+      source: { kind: "peer" as const, id: "peer-bound" }, content: "Uncertain delivery",
+    };
+    expect(await instance.adapter.deliverExternalOutput(command)).toMatchObject({ status: "ok", value: { status: "unknown", retrySafe: false } });
+    const before = instance.child.messages.length;
+    expect(await instance.adapter.deliverExternalOutput(command)).toMatchObject({ status: "ok", value: { status: "unknown", duplicate: true, retrySafe: false } });
+    expect(instance.child.messages).toHaveLength(before);
   });
 
   it("queues busy external output on the active turn without resolving its pending approval", async () => {

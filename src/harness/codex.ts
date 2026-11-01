@@ -87,11 +87,14 @@ interface Session {
   cleanup?: Promise<void>;
   resuming?: boolean;
   externalDeliveries: Map<string, ExternalDelivery>;
+  externalOutputBytes: number;
   externalSubmitting: boolean;
 }
 
 const EXTERNAL_OUTPUT_NAME = "peer_message";
 const EXTERNAL_OUTPUT_NAMESPACE = "aceteam.external";
+const MAX_EXTERNAL_DELIVERIES = 128;
+const MAX_EXTERNAL_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 function rejected(code: NativeHarnessRejectionCode, message: string): NativeHarnessCommandResult<never> {
   return { status: "rejected", code, message };
@@ -193,7 +196,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
       state: "starting", sequence: 0, listeners: new Set(), approvals: new Map(),
       seenRequests: new Set(), completedItems: new Set(), turnRequested: false,
       interruptRequested: false, completedTurns: new Set(), eventQueue: [], publishing: false, resuming,
-      externalDeliveries: new Map(), externalSubmitting: false,
+      externalDeliveries: new Map(), externalOutputBytes: 0, externalSubmitting: false,
     };
     this.session = session;
     this.usedSessionIds.add(command.sessionId);
@@ -344,8 +347,15 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
       source: { kind: "peer", id: source.id, ...(source.label === undefined ? {} : { label: source.label }) },
       content: command.content,
     });
-    if (Buffer.byteLength(encodedOutput) > 512 * 1024) {
+    const outputBytes = Buffer.byteLength(encodedOutput);
+    if (outputBytes > 512 * 1024) {
       return rejected("invalid_external_output", "External output exceeds the bounded native intake size.");
+    }
+    // Never evict a delivery ID: even an unknown result must stay deduplicated.
+    // Refuse new intake before reserving a turn, publishing events or writing.
+    if (session.externalDeliveries.size >= MAX_EXTERNAL_DELIVERIES ||
+        session.externalOutputBytes + outputBytes > MAX_EXTERNAL_OUTPUT_BYTES) {
+      return rejected("invalid_external_output", "This connection reached its external-output retention limit (128 deliveries or 8 MiB). Keep new deliveries in the consumer journal for manual review.");
     }
     const mode: NativeExternalOutputMode = busy ? "busy_queued" : "idle_started";
     const delivery: ExternalDelivery = {
@@ -362,6 +372,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
       session.completedItems.clear();
     }
     session.externalDeliveries.set(delivery.deliveryId, delivery);
+    session.externalOutputBytes += outputBytes;
     session.externalSubmitting = true;
     this.externalStatus(session, delivery, "received");
     if (!busy) this.state(session, "running", "turn/start.toolOutput", {}, command.correlationId);
