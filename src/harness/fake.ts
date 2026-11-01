@@ -1,5 +1,6 @@
 import {
   type CommandAccepted,
+  type DeliverExternalOutputCommand,
   type DisposeSessionCommand,
   type InterruptSessionCommand,
   type NativeDetails,
@@ -13,6 +14,7 @@ import {
   type NativeHarnessObservation,
   type NativeHarnessOperation,
   type NativeHarnessSessionIdentity,
+  type NativeExternalOutputResult,
   type NativeHarnessTurnIdentity,
   type ObserveSessionCommand,
   type RespondToApprovalCommand,
@@ -67,6 +69,10 @@ function defaultCapabilities(): NativeHarnessCapabilities {
   return {
     start: supported,
     sendInput: supported,
+    deliverExternalOutput: {
+      supported: false,
+      reason: "This fake adapter does not simulate native external intake.",
+    },
     observe: supported,
     interrupt: supported,
     respondToApproval: supported,
@@ -156,6 +162,17 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
       }
     }
     return { status: "ok", value: { accepted: true } };
+  }
+
+  async deliverExternalOutput(
+    _command: DeliverExternalOutputCommand
+  ): Promise<NativeHarnessCommandResult<NativeExternalOutputResult>> {
+    const blocked = this.beforeOperation("deliverExternalOutput");
+    return blocked ?? {
+      status: "unsupported",
+      operation: "deliverExternalOutput",
+      reason: "This fake adapter does not simulate native external intake.",
+    };
   }
 
   observe(

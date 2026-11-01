@@ -10,10 +10,10 @@ import {
   type NativeSessionRecord, type WorkspaceIdentity,
 } from "./session-store.js";
 import type {
-  CommandAccepted, DisposeSessionCommand, InterruptSessionCommand,
+  CommandAccepted, DeliverExternalOutputCommand, DisposeSessionCommand, InterruptSessionCommand,
   NativeHarnessAdapter, NativeHarnessCapabilities, NativeHarnessCommandResult,
   NativeHarnessEvent, NativeHarnessEventListener, NativeHarnessEventPayload,
-  NativeHarnessObservation, NativeHarnessRejectionCode, NativeHarnessSessionIdentity,
+  NativeHarnessObservation, NativeHarnessRejectionCode, NativeHarnessSessionIdentity, NativeExternalOutputResult,
   NativeHarnessSessionState, NativeHarnessTurnOutcome, ObserveSessionCommand,
   RespondToApprovalCommand, ResumeSessionCommand, SendInputCommand, SessionDisposed,
   StartSessionCommand,
@@ -251,6 +251,7 @@ export class ClaudeNativeHarnessAdapter implements NativeHarnessAdapter {
   readonly adapterId = "claude";
   readonly capabilities: NativeHarnessCapabilities = Object.freeze({
     start: Object.freeze({ supported: true as const }), sendInput: Object.freeze({ supported: true as const }),
+    deliverExternalOutput: Object.freeze({ supported: false as const, reason: "Claude external intake requires a separately validated native capability." }),
     observe: Object.freeze({ supported: true as const }), interrupt: Object.freeze({ supported: true as const }),
     respondToApproval: Object.freeze({ supported: true as const }), resume: Object.freeze({ supported: true as const }),
     dispose: Object.freeze({ supported: true as const }),
@@ -498,6 +499,11 @@ export class ClaudeNativeHarnessAdapter implements NativeHarnessAdapter {
     this.publish(session, { type: "approval.resolved", approvalId: pending.id, decision: command.decision, nativeApprovalId: pending.toolUseId }, command.correlationId);
     if (session.active && !session.cleanup) this.state(session, "running", "permission_resolved", this.permissionDetails(session));
     return { status: "ok", value: { accepted: true } };
+  }
+
+  async deliverExternalOutput(_command: DeliverExternalOutputCommand): Promise<NativeHarnessCommandResult<NativeExternalOutputResult>> {
+    return { status: "unsupported", operation: "deliverExternalOutput",
+      reason: "Claude external intake requires a separately validated native capability." };
   }
 
   async dispose(command: DisposeSessionCommand): Promise<NativeHarnessCommandResult<SessionDisposed>> {

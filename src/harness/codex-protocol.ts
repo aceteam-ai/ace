@@ -1,8 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
-/** Offline protocol evidence: codex app-server generate-ts, CLI 0.153.4, v2. */
-export const TESTED_CODEX_VERSION = "0.153.4";
+/** Offline protocol evidence: codex app-server generate-json-schema, CLI 0.154.0, v2. */
+export const TESTED_CODEX_VERSION = "0.154.0";
 
 export type CodexProcessFactory = (
   executable: string,
@@ -38,7 +38,7 @@ export class CodexError extends Error {
 export function asCodexError(error: unknown): CodexError {
   if (error instanceof CodexError) return error;
   if (object(error) && error.code === "ENOENT") {
-    return new CodexError("codex_not_installed", "Install Codex CLI 0.153.4 and ensure codex is on PATH.");
+    return new CodexError("codex_not_installed", `Install Codex CLI ${TESTED_CODEX_VERSION} and ensure codex is on PATH.`);
   }
   return new CodexError("codex_process_error", "Codex could not run. Check the executable and workspace.");
 }
@@ -106,6 +106,8 @@ export async function checkCodexVersion(
 
 export interface CodexRpcCall {
   result: Promise<JsonObject>;
+  /** Resolves when the complete request frame is accepted by the child stdin stream. */
+  submitted: Promise<void>;
   readonly completedFromNative: boolean;
   /** Settle only when correlated native evidence establishes this request's outcome. */
   completeFromNative(result: JsonObject): void;
@@ -156,14 +158,31 @@ export class CodexRpc {
   beginRequest(method: string, params: JsonObject): CodexRpcCall {
     const id = `ace-${++this.nextId}`;
     let completedFromNative = false;
+    let submit!: () => void;
+    let rejectSubmission!: (error: CodexError) => void;
+    const submitted = new Promise<void>((resolve, reject) => {
+      submit = resolve;
+      rejectSubmission = reject;
+    });
     const result = new Promise<JsonObject>((resolve, reject) => {
-      if (this.ended) { reject(new CodexError("codex_disconnected", "Codex is disconnected.")); return; }
+      if (this.ended) {
+        const error = new CodexError("codex_disconnected", "Codex is disconnected.");
+        rejectSubmission(error);
+        reject(error);
+        return;
+      }
       const timer = setTimeout(() => this.fail(new CodexError("codex_timeout", `Codex did not answer ${method}. The outcome is unknown; start a new session.`)), this.timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      void this.send({ id, method, params }, id).catch((error) => this.fail(asCodexError(error)));
+      void this.send({ id, method, params }, id).then(submit, (error) => {
+        const failure = asCodexError(error);
+        rejectSubmission(failure);
+        this.fail(failure);
+      });
     });
+    // Callers that only need the response must not create an unhandled submission rejection.
+    void submitted.catch(() => {});
     return {
-      result,
+      result, submitted,
       get completedFromNative() { return completedFromNative; },
       completeFromNative: (value) => {
         const pending = this.pending.get(id);

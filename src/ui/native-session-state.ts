@@ -115,6 +115,17 @@ export function reduceNativeEvent(state: NativeSessionState, event: NativeHarnes
         details: nativeText({ input: event.input, output: event.output, changes: item.changes, cwd: item.cwd }) });
       return next;
     }
+    case "external.output.status":
+      next.tools = upsert(next.tools, {
+        key: `external:${event.deliveryId}`, id: event.deliveryId, turnId: turn,
+        name: nativeText(`External output from ${event.source.label ?? event.source.id}`),
+        state: event.status,
+        details: nativeText({
+          provenance: "tool/external", source: event.source, mode: event.mode,
+          retrySafe: event.retrySafe, nativeItemId: event.nativeItemId,
+        }),
+      });
+      return next;
     case "worker.status":
       next.workers = upsert(next.workers, { key: event.workerId, id: event.workerId, name: nativeText(event.label ?? event.workerId), state: nativeText(event.nativeState ?? event.state), details: nativeText(event.nativeDetails) });
       return next;

@@ -282,11 +282,13 @@ pnpm test:integration
 
 The shared [native session panels](docs/native-sessions.md) use the
 [Codex adapter](docs/codex-adapter.md) for successive explicit
-turns in one Ace-created native thread using Codex CLI 0.153.4. It preserves native
+turns in one Ace-created native thread using Codex CLI 0.154.0. It preserves native
 authentication and permissions and has credential-free synthetic tests. The
 [turn lifecycle amendment](docs/native-turn-lifecycle.md) distinguishes native turns
 from the local session lifetime. [Explicit managed resume](docs/native-session-resume.md)
 uses only locally registered sessions and never replays old commands or approvals.
+The [Codex external intake foundation](docs/codex-external-intake.md) preserves
+peer handoffs as native tool output with explicit acceptance and ambiguity states.
 
 ## Related
 
