@@ -88,6 +88,31 @@ describe("harness manifest and child process", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  it("leaves a full registry intact when saving a new bundled overlay", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ace-launcher-cap-"));
+    try {
+      const path = join(dir, "registry.json");
+      const overlays = Array.from({ length: 30 }, (_, index) => ({
+        id: `custom-${index}`, name: `Custom ${index}`, description: "Fixture",
+        detect: `custom-${index}`, launch: { command: "custom", args: [] },
+      }));
+      const original = JSON.stringify(overlays, null, 2) + "\n";
+      writeFileSync(path, original);
+      const bundled = loadHarnesses(path).find((entry) => entry.id === "claude");
+      expect(bundled).toBeDefined();
+      expect(() => saveHarnessArgs(bundled!, ["--model", "test"], path)).toThrow("Invalid launcher registry");
+      expect(readFileSync(path, "utf8")).toBe(original);
+      expect(loadHarnesses(path)).toHaveLength(37);
+
+      // Replacing an existing overlay stays within the same bound.
+      const custom = loadHarnesses(path).find((entry) => entry.id === "custom-0");
+      expect(custom).toBeDefined();
+      saveHarnessArgs(custom!, ["--model", "test"], path);
+      expect(loadHarnesses(path).find((entry) => entry.id === "custom-0")?.launch.args)
+        .toEqual(["--model", "test"]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it("passes arguments literally to a local executable without a shell", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ace-launcher-bin-"));
     try {
