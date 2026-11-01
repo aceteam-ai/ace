@@ -41,7 +41,8 @@ it("routes ace mcp --json object to tool args and emits machine JSON", async () 
     '{"owner":"aceteam-ai","repo":"ace"}',
   ];
   const stdout = vi.spyOn(console, "log").mockImplementation(() => undefined);
-  await import("../../src/index.js");
+  const { main } = await import("../../src/index.js");
+  await main(process.argv);
 
   expect(fakeClient.callTool).toHaveBeenCalledWith("forge_pr_list", {
     owner: "aceteam-ai",

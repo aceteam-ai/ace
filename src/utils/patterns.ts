@@ -6,7 +6,7 @@ import ora from "ora";
 import chalk from "chalk";
 import { BUILTIN_PATTERNS, type PatternDef } from "../patterns/index.js";
 import { loadConfig } from "./config.js";
-import { runWorkflow, type RunResult } from "./python.js";
+import { runWorkflow, type ProgressEvent, type RunResult } from "./python.js";
 import { classifyWorkflowError } from "./errors.js";
 import * as output from "./output.js";
 
@@ -200,6 +200,8 @@ export interface RunPatternOptions {
   model?: string;
   json?: boolean;
   verbose?: boolean;
+  signal?: AbortSignal;
+  onProgress?: (event: ProgressEvent) => void;
 }
 
 export async function runPattern(
@@ -218,7 +220,11 @@ export async function runPattern(
       pythonPath,
       tempFile,
       { prompt: inputText },
-      { verbose: options.verbose }
+      {
+        verbose: options.verbose,
+        signal: options.signal,
+        onProgress: options.onProgress,
+      }
     );
 
     if (!result.success) {
