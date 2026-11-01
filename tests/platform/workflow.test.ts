@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PlatformClient } from "../../src/platform/client.js";
+import { PlatformClient } from "../../src/platform/client.js";
 import type { PlatformTemplate } from "../../src/platform/types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -39,6 +39,20 @@ beforeEach(() => {
 });
 
 describe("authorized platform template local execution", () => {
+  it("rejects a frozen unauthorized clone before touching the local runtime", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      workflow: { id: template.workflowId },
+      version: { id: template.workflowVersionId, workflow_id: template.workflowId, version_number: template.versionNumber, graph: template.graph },
+    }), { headers: { "content-type": "application/json" } }));
+    const owner = new PlatformClient("https://platform.example", "synthetic-key", { fetch });
+    const authorized = await owner.getTemplate({ workflowId: template.workflowId, title: template.title, versionNumber: template.versionNumber });
+    await expect(runPlatformTemplateLocally(owner, Object.freeze(structuredClone(authorized)), { prompt: "hello" })).rejects.toMatchObject({ code: "unauthorized_template_object" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(mocks.ensurePython).not.toHaveBeenCalled();
+    expect(mocks.validateNodeTypes).not.toHaveBeenCalled();
+    expect(mocks.runWorkflow).not.toHaveBeenCalled();
+  });
+
   it("validates before Python and removes the private graph after success", async () => {
     await expect(runPlatformTemplateLocally(client, template, { prompt: 4 })).rejects.toThrow("prompt expects string");
     expect(mocks.ensurePython).not.toHaveBeenCalled();

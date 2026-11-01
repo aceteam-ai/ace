@@ -128,8 +128,9 @@ describe("PlatformClient remote execution", () => {
 
   it("requires the exact template object authorized by the same client", async () => {
     const { client, template, fetch } = await authorizedClient(json({}));
-    await expect(client.runTemplate(structuredClone(template), {})).rejects.toMatchObject({ code: "unauthorized_template_object" });
+    await expect(client.runTemplate(Object.freeze(structuredClone(template)), {})).rejects.toMatchObject({ code: "unauthorized_template_object" });
     expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls.some(([input]) => new URL(String(input)).pathname.includes("/run/"))).toBe(false);
   });
 
   it("never treats a mismatched result version as success", async () => {
