@@ -58,6 +58,7 @@ export function saveHarnessArgs(entry: HarnessManifest, args: string[], path = l
   const updated = { ...entry, launch: { ...entry.launch, args } };
   const next = overlays.filter((item) => item.id !== entry.id);
   next.push(updated);
+  if (next.length > 30) throw new Error(`Invalid launcher registry: ${path}`);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   writeFileSync(path, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
   chmodSync(path, 0o600);
