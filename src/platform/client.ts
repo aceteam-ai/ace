@@ -54,6 +54,32 @@ function safeText(value: string, limit = TEXT_FIELD_LIMIT): string {
   return value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "").slice(0, limit);
 }
 
+/** Scrub complete strings before any display truncation, including nested keys. */
+function redactCredential<T>(value: T, apiKey: string): T {
+  const seen = new Map<object, object>();
+  const pending: Array<[object, object]> = [];
+  const copy = (entry: unknown): unknown => {
+    if (typeof entry === "string") return entry.replaceAll(apiKey, "[redacted]");
+    if (entry === null || typeof entry !== "object") return entry;
+    const previous = seen.get(entry);
+    if (previous) return previous;
+    const result = Array.isArray(entry) ? [] : {};
+    seen.set(entry, result);
+    pending.push([entry, result]);
+    return result;
+  };
+  const result = copy(value);
+  while (pending.length) {
+    const [source, target] = pending.pop()!;
+    for (const [key, entry] of Object.entries(source)) {
+      Object.defineProperty(target, key.replaceAll(apiKey, "[redacted]"), {
+        value: copy(entry), enumerable: true, configurable: true, writable: true,
+      });
+    }
+  }
+  return result as T;
+}
+
 function deepFreeze<T>(value: T, seen = new Set<object>()): T {
   if (value && typeof value === "object" && !seen.has(value)) {
     seen.add(value);
@@ -103,7 +129,8 @@ function decodeJson(bytes: Uint8Array, context: string): unknown {
   }
 }
 
-function runError(value: unknown): PlatformRunErrorDetails | undefined {
+function runError(value: unknown, apiKey: string): PlatformRunErrorDetails | undefined {
+  value = redactCredential(value, apiKey);
   if (value === null || value === undefined) return undefined;
   if (typeof value === "string") {
     const message = safeText(value);
@@ -118,7 +145,7 @@ function runError(value: unknown): PlatformRunErrorDetails | undefined {
   return { message: message ? safeText(message) : undefined, workflowErrors, nodeErrors };
 }
 
-function parseRunResult(value: unknown, template: PlatformTemplate, sticky?: "failed" | "cancelled", jobId?: string): PlatformRunResult {
+function parseRunResult(value: unknown, template: PlatformTemplate, apiKey: string, sticky?: "failed" | "cancelled", jobId?: string): PlatformRunResult {
   if (!object(value)) throw unknownOutcome("Platform returned a malformed terminal result.", "invalid_terminal_result");
   const workflowVersionId = text(value.workflowVersionId);
   const runId = text(value.runId);
@@ -131,7 +158,7 @@ function parseRunResult(value: unknown, template: PlatformTemplate, sticky?: "fa
   if (!Array.isArray(value.error.workflow_errors) || !object(value.error.node_errors)) {
     throw unknownOutcome("Platform returned an invalid execution error container.", "invalid_terminal_result", { runId, jobId });
   }
-  const error = runError(value.error);
+  const error = runError(value.error, apiKey);
   const status = sticky ?? (error ? "failed" : "completed");
   return {
     status,
@@ -162,6 +189,30 @@ export class PlatformClient {
     if (!this.#fetch) throw new Error("Fetch is unavailable in this Node.js runtime.");
   }
 
+  #safeText(value: string, limit = TEXT_FIELD_LIMIT): string {
+    return safeText(value.replaceAll(this.#apiKey, "[redacted]"), limit);
+  }
+
+  #safeFailure(error: PlatformClientError): PlatformClientError {
+    return new PlatformClientError(
+      this.#safeText(error.message, ERROR_LIMIT), this.#safeText(error.code),
+      error.status, error.outcomeUnknown,
+      error.runId === undefined ? undefined : this.#safeText(error.runId),
+      error.jobId === undefined ? undefined : this.#safeText(error.jobId),
+    );
+  }
+
+  async #readBody(response: Response, limit: number): Promise<Uint8Array> {
+    try { return await readBounded(response, limit); }
+    catch (error) {
+      if (error instanceof PlatformClientError) throw this.#safeFailure(error);
+      throw new PlatformClientError(
+        `Platform response could not be read: ${this.#safeText(error instanceof Error ? error.message : String(error))}`,
+        "response_read_failed", response.status,
+      );
+    }
+  }
+
   async #fetchResponse(path: string, init: RequestInit, runSubmission = false): Promise<Response> {
     try {
       const response = await this.#fetch(new URL(path, this.origin), {
@@ -179,7 +230,7 @@ export class PlatformClient {
       }
       return response;
     } catch (error) {
-      if (error instanceof PlatformClientError) throw error;
+      if (error instanceof PlatformClientError) throw this.#safeFailure(error);
       const raw = error instanceof Error ? error.message : String(error);
       const message = safeText(raw.replaceAll(this.#apiKey, "[redacted]"));
       if (runSubmission) throw unknownOutcome(`Remote submission could not be observed: ${message}`, "remote_transport_unknown");
@@ -190,12 +241,12 @@ export class PlatformClient {
   async #requireOk(response: Response, runSubmission = false): Promise<void> {
     if (response.ok) return;
     if (runSubmission && (response.status === 408 || response.status >= 500)) {
-      try { await readBounded(response, ERROR_LIMIT); } catch { /* outcome remains unknown */ }
+      try { await this.#readBody(response, ERROR_LIMIT); } catch { /* outcome remains unknown */ }
       throw unknownOutcome(`Platform returned HTTP ${response.status} after submission.`, "remote_http_unknown", { status: response.status });
     }
-    const bytes = await readBounded(response, ERROR_LIMIT);
+    const bytes = await this.#readBody(response, ERROR_LIMIT);
     const raw = new TextDecoder().decode(bytes);
-    const detail = safeText(raw.replaceAll(this.#apiKey, "[redacted]"), ERROR_LIMIT) || response.statusText;
+    const detail = this.#safeText(raw, ERROR_LIMIT) || "No error details provided.";
     const code = response.status === 401 ? "authentication_failed"
       : response.status === 403 ? "authorization_failed"
         : response.status === 402 ? "credits_required"
@@ -208,7 +259,7 @@ export class PlatformClient {
     if (options.category) url.searchParams.set("category", options.category);
     const response = await this.#fetchResponse(`${url.pathname}${url.search}`, { method: "GET", signal: options.signal });
     await this.#requireOk(response);
-    const value = decodeJson(await readBounded(response, CATALOG_LIMIT), "template catalog");
+    const value = decodeJson(await this.#readBody(response, CATALOG_LIMIT), "template catalog");
     if (!object(value) || !Array.isArray(value.templates)) {
       throw new PlatformClientError("Platform returned an invalid template catalog.", "invalid_catalog");
     }
@@ -237,7 +288,7 @@ export class PlatformClient {
     const path = `/api/workflow-engine/${encodeURIComponent(summary.workflowId)}?version=${summary.versionNumber}`;
     const response = await this.#fetchResponse(path, { method: "GET", signal: options.signal });
     await this.#requireOk(response);
-    const value = decodeJson(await readBounded(response, DETAIL_LIMIT), "template detail");
+    const value = decodeJson(await this.#readBody(response, DETAIL_LIMIT), "template detail");
     if (!object(value) || !object(value.workflow)) {
       throw new PlatformClientError("Platform returned an invalid template detail.", "invalid_template_detail");
     }
@@ -254,7 +305,7 @@ export class PlatformClient {
     try {
       graph = structuredClone(parseWorkflowGraph(value.version.graph));
     } catch (error) {
-      throw new PlatformClientError(error instanceof Error ? error.message : "Platform template graph is invalid.", "invalid_template_graph");
+      throw new PlatformClientError(this.#safeText(error instanceof Error ? error.message : "Platform template graph is invalid."), "invalid_template_graph");
     }
     const template = deepFreeze({ ...summary, workflowVersionId, graph });
     this.#authorizedTemplates.add(template);
@@ -286,15 +337,15 @@ export class PlatformClient {
       throw error;
     }
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-    if (contentType.includes("text/event-stream")) {
-      return this.#readRunStream(response, template, options);
-    }
     try {
-      return parseRunResult(decodeJson(await readBounded(response, DETAIL_LIMIT), "run result"), template);
+      if (contentType.includes("text/event-stream")) {
+        return await this.#readRunStream(response, template, options);
+      }
+      return redactCredential(parseRunResult(decodeJson(await this.#readBody(response, DETAIL_LIMIT), "run result"), template, this.#apiKey), this.#apiKey);
     } catch (error) {
+      if (error instanceof PlatformClientError && error.outcomeUnknown) throw this.#safeFailure(error);
       if (options.signal?.aborted) throw unknownOutcome("Remote observation was aborted.", "remote_aborted_unknown");
-      if (error instanceof PlatformClientError && error.outcomeUnknown) throw error;
-      const detail = safeText(error instanceof Error ? error.message : String(error));
+      const detail = this.#safeText(error instanceof Error ? error.message : String(error));
       throw unknownOutcome(`Platform run response could not be confirmed: ${detail}`, "remote_response_unknown");
     }
   }
@@ -329,23 +380,23 @@ export class PlatformClient {
         jobId = text(event.jobId) ?? jobId;
       } else if (type === "error") {
         sticky = "failed";
-        stickyError = runError(event.error ?? event.message) ?? { message: "Platform reported remote execution failure.", workflowErrors: [], nodeErrors: {} };
+        stickyError = runError(event.error ?? event.message, this.#apiKey) ?? { message: "Platform reported remote execution failure.", workflowErrors: [], nodeErrors: {} };
       } else if (type === "cancelled") {
         sticky = "cancelled";
       } else if (type === "complete") {
-        terminal = parseRunResult(event, template, sticky, jobId);
+        terminal = parseRunResult(event, template, this.#apiKey, sticky, jobId);
         if (stickyError && !terminal.error) terminal.error = stickyError;
       } else {
         const progress: PlatformRunProgress = {
-          type: safeText(type),
-          ...(optionalText(event.message) ? { message: safeText(event.message as string) } : {}),
-          ...(optionalText(event.nodeName) ? { nodeName: safeText(event.nodeName as string) } : {}),
+          type: this.#safeText(type),
+          ...(optionalText(event.message) ? { message: this.#safeText(event.message as string) } : {}),
+          ...(optionalText(event.nodeName) ? { nodeName: this.#safeText(event.nodeName as string) } : {}),
           ...(positiveInteger(event.currentNode) ? { currentNode: event.currentNode as number } : {}),
           ...(positiveInteger(event.totalNodes) ? { totalNodes: event.totalNodes as number } : {}),
           ...(text(event.runId) ? { runId: text(event.runId) } : {}),
           ...(text(event.jobId) ? { jobId: text(event.jobId) } : {}),
         };
-        options.onProgress?.(progress);
+        options.onProgress?.(redactCredential(progress, this.#apiKey));
       }
     };
 
@@ -392,7 +443,7 @@ export class PlatformClient {
         try { chunk = await reader.read(); }
         catch (error) {
           if (options.signal?.aborted) throw unknownOutcome("Remote observation was aborted.", "remote_aborted_unknown");
-          throw unknownOutcome(`Platform run stream disconnected: ${safeText(error instanceof Error ? error.message : String(error))}`);
+          throw unknownOutcome(`Platform run stream disconnected: ${this.#safeText(error instanceof Error ? error.message : String(error))}`);
         }
         if (chunk.done) break;
         try { pending += decoder.decode(chunk.value, { stream: true }); }
@@ -403,30 +454,30 @@ export class PlatformClient {
           throw unknownOutcome("Platform streaming event exceeded the allowed size.", "stream_event_too_large");
         }
       }
-      if (terminal) return terminal;
+      if (terminal) return redactCredential(terminal, this.#apiKey);
       try { pending += decoder.decode(); }
       catch { throw unknownOutcome("Platform returned invalid UTF-8 streaming data.", "invalid_stream_encoding"); }
       drainLines(true);
-      if (terminal) return terminal;
+      if (terminal) return redactCredential(terminal, this.#apiKey);
       if (dataLines.length > 0) throw unknownOutcome("Platform run stream ended during an event.", "incomplete_stream_event");
       if (sticky) {
-        return {
+        return redactCredential({
           status: sticky,
           ...(jobId ? { jobId } : {}),
           ...(runId ? { runId } : {}),
           ...(stickyError ? { error: stickyError } : {}),
-        };
+        }, this.#apiKey);
       }
       throw unknownOutcome("Platform run stream ended without terminal evidence.");
     } catch (error) {
       const failure = error instanceof PlatformClientError
         ? error
-        : unknownOutcome(`Platform stream observation failed: ${safeText(error instanceof Error ? error.message : String(error))}`, "remote_observation_unknown");
+        : unknownOutcome(`Platform stream observation failed: ${this.#safeText(error instanceof Error ? error.message : String(error))}`, "remote_observation_unknown");
       if (failure.outcomeUnknown) {
         failure.runId ??= runId;
         failure.jobId ??= jobId;
       }
-      throw failure;
+      throw this.#safeFailure(failure);
     } finally {
       await reader.cancel().catch(() => undefined);
       reader.releaseLock();
