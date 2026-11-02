@@ -250,3 +250,91 @@ describe("runPattern", () => {
     ).rejects.toThrow("Python error");
   });
 });
+
+describe("user graph tasks", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("prefers canonical user graphs over legacy prompts and bundled graphs", () => {
+    const file = join(homedir(), ".ace", "patterns", "summarize", "workflow.json");
+    const value = structuredClone(BUILTIN_PATTERNS[0].workflow);
+    value.name = "Custom graph";
+    value.inner_nodes[0].params.system_prompt = "Graph prompt";
+    mockExistsSync.mockImplementation((path) => String(path) === file || String(path).endsWith("system.md"));
+    mockReadFileSync.mockImplementation((path) => {
+      if (String(path) === file) return JSON.stringify(value);
+      throw new Error("legacy source should not be read");
+    });
+    const task = loadPattern("summarize")!;
+    expect(task.name).toBe("Custom graph");
+    expect(task.category).toBe("user");
+    expect(task.workflow).toEqual(value);
+    expect(task.systemPrompt).toBe("Graph prompt");
+    expect(task.useDefaultModel).toBe(false);
+  });
+
+  it("reports a malformed user graph instead of silently loading a built-in", () => {
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("workflow.json"));
+    mockReadFileSync.mockReturnValue('{"input_node":{}}');
+    expect(() => loadPattern("summarize")).toThrow("Cannot load task summarize");
+    mockReadFileSync.mockReturnValue('{broken');
+    expect(() => loadPattern("summarize")).toThrow("workflow.json");
+  });
+
+  it("never reads graph files using traversal names", () => {
+    expect(loadPattern("../summarize")).toBeUndefined();
+    expect(loadPattern("nested/summarize")).toBeUndefined();
+    expect(mockReadFileSync).not.toHaveBeenCalled();
+  });
+
+  it("rejects additional required inputs before executing a named text task", async () => {
+    const { definePattern } = await import("../../src/patterns/index.js");
+    const value = structuredClone(BUILTIN_PATTERNS[0].workflow);
+    value.input_node.params.fields.instructions = { type: "string" };
+    await expect(runPattern("python", definePattern("custom", "user", value), "text"))
+      .rejects.toThrow("named workflow inputs");
+    expect(mockRunWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("cleans up failed runs and gives concurrent runs distinct temporary files", async () => {
+    const { unlinkSync, writeFileSync } = await import("node:fs");
+    mockRunWorkflow.mockResolvedValue({ success: true, output: { response: "Synthetic output" } });
+    await Promise.all([
+      runPattern("python", BUILTIN_PATTERNS[0], "one"),
+      runPattern("python", BUILTIN_PATTERNS[0], "two"),
+    ]);
+    const files = mockRunWorkflow.mock.calls.map((call) => call[1]);
+    expect(new Set(files).size).toBe(2);
+    for (const file of files) {
+      expect(unlinkSync).toHaveBeenCalledWith(file);
+      expect(writeFileSync).toHaveBeenCalledWith(file, expect.any(String), { encoding: "utf-8", mode: 0o600, flag: "wx" });
+    }
+    mockRunWorkflow.mockRejectedValueOnce(new Error("Synthetic failure"));
+    await expect(runPattern("python", BUILTIN_PATTERNS[0], "three")).rejects.toThrow("Synthetic failure");
+    expect(unlinkSync).toHaveBeenCalledWith(mockRunWorkflow.mock.calls[2][1]);
+  });
+});
+
+
+describe("temporary task file ownership", () => {
+  it("does not remove a file when exclusive creation fails", async () => {
+    vi.clearAllMocks();
+    const { writeFileSync, unlinkSync } = await import("node:fs");
+    vi.mocked(writeFileSync).mockImplementationOnce(() => { throw new Error("Synthetic write failure"); });
+    await expect(runPattern("python", BUILTIN_PATTERNS[0], "text")).rejects.toThrow("Synthetic write failure");
+    expect(unlinkSync).not.toHaveBeenCalled();
+    expect(mockRunWorkflow).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("named task output compatibility", () => {
+  it("rejects structured output before submitting a workflow", async () => {
+    vi.clearAllMocks();
+    const { definePattern } = await import("../../src/patterns/index.js");
+    const value = structuredClone(BUILTIN_PATTERNS[0].workflow);
+    value.output_node.params.fields.response = { type: "object", properties: { result: { type: "string" } } };
+    await expect(runPattern("python", definePattern("structured", "user", value), "text"))
+      .rejects.toThrow("keep its structured output");
+    expect(mockRunWorkflow).not.toHaveBeenCalled();
+  });
+});

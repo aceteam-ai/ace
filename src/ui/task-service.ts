@@ -5,12 +5,14 @@ import { TEMPLATES, getTemplateById, type TemplateMetadata } from "../templates/
 import { loadConfig, saveConfig, type AceConfig } from "../utils/config.js";
 import { ensurePython } from "../utils/ensure-python.js";
 import { validateNodeTypes } from "../utils/node-cache.js";
-import { listPatterns, loadPattern, runPattern } from "../utils/patterns.js";
+import { listPatterns, loadPattern, runPattern, validatePatternInput } from "../utils/patterns.js";
 import { detectProvider, type ProviderInfo } from "../utils/provider-detect.js";
 import { runWorkflow, type ProgressEvent } from "../utils/python.js";
+import { getWorkflowInputFields } from "../utils/workflow-graph.js";
+import { workflowInputFields, type WorkflowInputField } from "./workflow-form.js";
 
 export interface TaskProgress { message: string; event?: ProgressEvent }
-export interface ExecuteOptions { signal: AbortSignal; model?: string; onProgress: (progress: TaskProgress) => void }
+export interface ExecuteOptions { signal: AbortSignal; onProgress: (progress: TaskProgress) => void }
 export interface WorkspaceTaskService {
   detectProvider(): Promise<ProviderInfo>;
   listPatterns(): PatternDef[];
@@ -18,8 +20,8 @@ export interface WorkspaceTaskService {
   getDemo(patternId: string): DemoOutput | undefined;
   getConfig(): AceConfig;
   executePattern(patternId: string, input: string, options: ExecuteOptions): Promise<string>;
-  getWorkflowInputs(filePath: string): string[];
-  executeWorkflow(filePath: string, input: Record<string, string>, options: ExecuteOptions): Promise<string>;
+  getWorkflowInputs(filePath: string): WorkflowInputField[];
+  executeWorkflow(filePath: string, input: Record<string, unknown>, options: ExecuteOptions): Promise<string>;
   createWorkflow(templateId: string, outputPath: string): string;
   updateDefaultModel(model: string): void;
 }
@@ -37,10 +39,10 @@ export const taskService: WorkspaceTaskService = {
   async executePattern(patternId, input, options) {
     const pattern = loadPattern(patternId);
     if (!pattern) throw new Error(`Task not found: ${patternId}`);
+    validatePatternInput(pattern);
     const python = await ensurePython({ signal: options.signal, onProgress: runtimeProgress(options) });
     options.onProgress({ message: `Running ${pattern.name}` });
     return runPattern(python, pattern, input, {
-      model: options.model,
       signal: options.signal,
       onProgress: (event) => options.onProgress({ message: progressLabel(event), event }),
     });
@@ -50,10 +52,13 @@ export const taskService: WorkspaceTaskService = {
     let workflow: Record<string, unknown>;
     try { workflow = JSON.parse(readFileSync(filePath, "utf-8")) as Record<string, unknown>; }
     catch { throw new Error(`Invalid JSON file: ${filePath}`); }
-    const fields = (workflow.input_node as { params?: { fields?: Record<string, unknown> } } | undefined)?.params?.fields;
-    if (fields) return Object.keys(fields);
-    const legacy = workflow.inputs as Array<{ name?: string }> | undefined;
-    return legacy?.flatMap((item) => item.name ? [item.name] : []) ?? [];
+    if ("input_node" in workflow) return workflowInputFields(getWorkflowInputFields(workflow));
+    const legacy = workflow.inputs as Array<{ name?: string; description?: string; default?: unknown; type?: string }> | undefined;
+    return legacy?.flatMap((item) => item.name ? [{
+      name: item.name,
+      schema: { type: item.type ?? "string", description: item.description, ...(Object.hasOwn(item, "default") ? { default: item.default } : {}) },
+      required: !Object.hasOwn(item, "default"),
+    }] : []) ?? [];
   },
   async executeWorkflow(filePath, input, options) {
     if (!existsSync(filePath)) throw new Error(`File not found: ${filePath}`);

@@ -1,0 +1,50 @@
+{
+  "name": "Explain",
+  "description": "Explain complex content in simpler terms",
+  "input_node": {
+    "id": "input",
+    "type": "Input",
+    "params": {
+      "fields": {
+        "prompt": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "output_node": {
+    "id": "output",
+    "type": "Output",
+    "params": {
+      "fields": {
+        "response": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "inner_nodes": [
+    {
+      "id": "llm",
+      "type": "LLM",
+      "params": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are an expert educator. Explain the input text in clear, simple language that a non-expert can understand.\n\nGuidelines:\n- Use plain language — avoid jargon or define it when necessary\n- Use analogies and examples to illustrate complex concepts\n- Break down the explanation into logical steps\n- Aim for a high school reading level\n- Preserve accuracy while simplifying\n\nStructure your response with clear sections if the topic warrants it."
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source_id": "input",
+      "source_key": "prompt",
+      "target_id": "llm",
+      "target_key": "prompt"
+    },
+    {
+      "source_id": "llm",
+      "source_key": "response",
+      "target_id": "output",
+      "target_key": "response"
+    }
+  ]
+}
