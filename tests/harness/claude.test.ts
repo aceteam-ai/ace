@@ -104,6 +104,53 @@ describe("Claude Agent native adapter", () => {
     expect(opened).toMatchObject({ status: "error", code }); expect(factory).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "https://gateway.invalid/v1",
+    "http://api.anthropic.com",
+    "https://api.anthropic.com.gateway.invalid",
+    "https://api.anthropic.com@gateway.invalid",
+    "https://api.anthropic.com/v1",
+    "https://api.anthropic.com?gateway=1",
+    " ",
+  ])("refuses inherited gateway routing before SDK import for start and resume: %s", async (baseUrl) => {
+    const sdk = new SyntheticClaudeSdk(); const factory = vi.fn(async () => sdk); const cwd = await workspace();
+    const adapter = new ClaudeNativeHarnessAdapter({ sdkFactory: factory,
+      environment: { ANTHROPIC_API_KEY: "synthetic-key", ANTHROPIC_BASE_URL: baseUrl } });
+    const opened = await adapter.start({ type: "session.start", sessionId: "gateway-start", workspace: cwd });
+    expect(opened).toMatchObject({ status: "error", code: "claude_authentication_route_unsupported" });
+    const resumed = await adapter.resume({ type: "session.resume", sessionId: "gateway-resume", workspace: cwd,
+      registeredSessionId: "saved", nativeSessionId: "11111111-1111-4111-8111-111111111111" });
+    expect(resumed).toMatchObject({ status: "error", code: "claude_authentication_route_unsupported" });
+    expect(factory).not.toHaveBeenCalled(); expect(sdk.queryCalls).toHaveLength(0);
+    if (baseUrl.trim()) expect(JSON.stringify([opened, resumed])).not.toContain(baseUrl);
+  });
+
+  it.each([undefined, "", "https://api.anthropic.com", "https://api.anthropic.com/"])(
+    "keeps the default first-party API-key route available: %s", async (baseUrl) => {
+      const instance = await rig({ environment: { ANTHROPIC_API_KEY: "synthetic-key", ANTHROPIC_BASE_URL: baseUrl } });
+      expect(instance.sdk.queryCalls).toHaveLength(1);
+      await instance.adapter.dispose({ type: "session.dispose", session: instance.session });
+    },
+  );
+
+  it("accepts an explicit default endpoint from resolved native settings", async () => {
+    const sdk = new SyntheticClaudeSdk();
+    sdk.resolvedSettings = { effective: { env: { ANTHROPIC_BASE_URL: "https://api.anthropic.com/" } }, sources: [] };
+    const instance = await rig({ sdk }); expect(sdk.queryCalls).toHaveLength(1);
+    await instance.adapter.dispose({ type: "session.dispose", session: instance.session });
+  });
+
+  it("refuses a gateway from resolved native settings before opening a query", async () => {
+    const cwd = await workspace(); const sdk = new SyntheticClaudeSdk();
+    sdk.resolvedSettings = { effective: { env: { ANTHROPIC_BASE_URL: "https://gateway.invalid/v1" } }, sources: [] };
+    const adapter = new ClaudeNativeHarnessAdapter({ sdkFactory: async () => sdk,
+      environment: { ANTHROPIC_API_KEY: "synthetic-key" } });
+    expect(await adapter.start({ type: "session.start", sessionId: "settings-gateway", workspace: cwd })).toMatchObject({
+      status: "error", code: "claude_authentication_route_unsupported",
+    });
+    expect(sdk.resolveSettingsCalls).toHaveLength(1); expect(sdk.queryCalls).toHaveLength(0);
+  });
+
   it("confirms delayed native identity through the awaited hook before publishing native events", async () => {
     let release!: () => void; const barrier = new Promise<void>((resolve) => { release = resolve; });
     const hook = vi.fn(async () => barrier); const instance = await rig({ hook });

@@ -4,7 +4,7 @@ Ace can host the pinned Claude Agent SDK as a local native session while leaving
 
 ## Authentication
 
-Set `ANTHROPIC_API_KEY` in the environment that starts Ace. The adapter accepts only the SDK's confirmed first-party API-key route. It rejects bearer/OAuth variables and enabled Bedrock, Vertex, or Foundry routes rather than silently changing providers. Ace does not copy the key into its config, session registry, events, or logs.
+Set `ANTHROPIC_API_KEY` in the environment that starts Ace. The adapter accepts only the SDK's confirmed first-party API-key route. It rejects bearer/OAuth variables and enabled Bedrock, Vertex, or Foundry routes rather than silently changing providers. An inherited or resolved-settings `ANTHROPIC_BASE_URL` must be absent, empty, or exactly `https://api.anthropic.com` (an optional trailing slash is accepted). Alternate endpoints, including gateways, are refused before a native query starts; SDK `firstParty` account metadata alone does not prove the request destination. Ace does not copy the key into its config, session registry, events, or logs.
 
 Before opening the native query, the adapter uses the SDK's public settings resolver and vendor trust filter for Claude's `user`, `project`, and `local` sources. It explicitly preserves `default`, `plan`, and `dontAsk`. It rejects other retained modes and visible managed `policyHelper`/`policyHelpers` configuration because this adapter does not execute a policy helper. A project escalation removed by the vendor filter resolves to `default`. Resume resolves current settings again and never restores a permission grant from Ace state.
 
