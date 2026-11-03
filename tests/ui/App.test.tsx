@@ -213,7 +213,7 @@ describe("terminal workspace", () => {
     expect(view.lastFrame()).not.toContain("Hello LLM");
     expect(view.lastFrame()?.split("\n").length).toBeLessThanOrEqual(12);
     view.stdin.write("\r"); await tick();
-    expect(view.lastFrame()).toContain("Authoring example only");
+    expect(view.lastFrame()).toContain("Fetch a URL then summarize it.");
     for (let i = 0; i < 8; i++) { view.stdin.write("j"); await tick(); }
     expect(view.lastFrame()).toContain("Input schema");
     expect(view.lastFrame()).toContain("URL");

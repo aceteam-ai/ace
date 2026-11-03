@@ -27,7 +27,8 @@ import {
 import { DEMOS } from "../demos/index.js";
 import * as output from "../utils/output.js";
 
-const DEFAULT_VENV_DIR = join(homedir(), ".ace", "venv");
+const LEGACY_VENV_DIR = join(homedir(), ".ace", "venv");
+const DEFAULT_VENV_DIR = join(homedir(), ".ace", "venv-workflow2-rc16");
 
 // ── Exported setup functions (reusable by TUI) ──────────────
 
@@ -137,7 +138,7 @@ export const initCommand = new Command("init")
     console.log(chalk.bold("\n2. Virtual environment"));
 
     const config = existsSync(configPath) ? loadConfig() : {};
-    const venvDir = config.venv_dir || DEFAULT_VENV_DIR;
+    const venvDir = config.venv_dir && config.venv_dir !== LEGACY_VENV_DIR ? config.venv_dir : DEFAULT_VENV_DIR;
 
     if (isVenvValid(venvDir)) {
       const venvPython = getVenvPythonPath(venvDir);

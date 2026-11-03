@@ -1,0 +1,52 @@
+{
+  "input_node": {
+    "type": "Input",
+    "version": "1.0.0",
+    "id": "input",
+    "params": {
+      "fields": {}
+    }
+  },
+  "inner_nodes": [
+    {
+      "type": "ConstantString",
+      "version": "0.4.0",
+      "id": "constant",
+      "params": {
+        "value": "test"
+      }
+    },
+    {
+      "type": "Error",
+      "version": "0.4.0",
+      "id": "error",
+      "params": {
+        "error_name": "RuntimeError"
+      }
+    }
+  ],
+  "output_node": {
+    "type": "Output",
+    "version": "1.0.0",
+    "id": "output",
+    "params": {
+      "fields": {
+        "text": {"type": "string"}
+      }
+    }
+  },
+  "edges": [
+    {
+      "source_id": "constant",
+      "source_key": "value",
+      "target_id": "error",
+      "target_key": "info"
+    },
+    {
+      "source_id": "constant",
+      "source_key": "value",
+      "target_id": "output",
+      "target_key": "text"
+    }
+  ]
+}

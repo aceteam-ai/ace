@@ -7,7 +7,7 @@ import { TEMPLATES, getTemplateById } from "../../src/templates/index.js";
  *
  * Key v2 requirements:
  * - input_node / output_node / inner_nodes / edges (not nodes/inputs/outputs)
- * - Field schemas use {"type": "string"} not {"value_type": "string"}
+ * - Field schemas use engine-supported type or title, never legacy value_type
  * - LLM node params: only "model" and "system_prompt" (no temperature/max_tokens)
  */
 describe("v2 template schema compliance", () => {
@@ -28,27 +28,27 @@ describe("v2 template schema compliance", () => {
     }
   });
 
-  it("input_node field schemas use 'type' not 'value_type'", () => {
+  it("input_node fields use an engine-supported schema, not legacy value_type", () => {
     for (const template of TEMPLATES) {
       const inputNode = template.workflow.input_node as {
         params: { fields: Record<string, Record<string, unknown>> };
       };
 
       for (const [fieldName, schema] of Object.entries(inputNode.params.fields)) {
-        expect(schema, `${template.id}.input_node.${fieldName}: must use 'type'`).toHaveProperty("type");
+        expect('type' in schema || 'title' in schema, `${template.id}.input_node.${fieldName}: requires type or title`).toBe(true);
         expect(schema, `${template.id}.input_node.${fieldName}: must not use 'value_type'`).not.toHaveProperty("value_type");
       }
     }
   });
 
-  it("output_node field schemas use 'type' not 'value_type'", () => {
+  it("output_node fields use an engine-supported schema, not legacy value_type", () => {
     for (const template of TEMPLATES) {
       const outputNode = template.workflow.output_node as {
         params: { fields: Record<string, Record<string, unknown>> };
       };
 
       for (const [fieldName, schema] of Object.entries(outputNode.params.fields)) {
-        expect(schema, `${template.id}.output_node.${fieldName}: must use 'type'`).toHaveProperty("type");
+        expect('type' in schema || 'title' in schema, `${template.id}.output_node.${fieldName}: requires type or title`).toBe(true);
         expect(schema, `${template.id}.output_node.${fieldName}: must not use 'value_type'`).not.toHaveProperty("value_type");
       }
     }
@@ -195,13 +195,13 @@ describe("v2 template schema compliance", () => {
   });
 });
 
-describe("API authoring example", () => {
+describe("API local example", () => {
   it("declares its URL input and uses the actual APICall response key", () => {
     const template = getTemplateById("api-to-llm")!;
     const fetch = template.workflow.inner_nodes.find((node) => node.id === "fetch")!;
     expect(fetch.params.url).toBe("{{ url }}");
     expect(fetch.params.parameters).toEqual({ url: { type: "string" } });
     expect(template.workflow.edges.find((edge) => edge.source_id === "fetch")?.source_key).toBe("response");
-    expect(template.runtimeWarning).toContain("Authoring example only");
+    expect(template.runtimeWarning).toBeUndefined();
   });
 });

@@ -37,7 +37,9 @@ async function ready(path: string | undefined, signal?: AbortSignal): Promise<bo
 
 async function bootstrap(options: OperationOptions): Promise<string> {
   const config = loadConfig();
-  const venvDir = config.venv_dir ?? join(homedir(), ".ace", "venv");
+  const legacyDir = join(homedir(), ".ace", "venv");
+  const venvDir = config.venv_dir && config.venv_dir !== legacyDir
+    ? config.venv_dir : join(homedir(), ".ace", "venv-workflow2-rc16");
   const managedPython = getVenvPythonPath(venvDir);
 
   if (await ready(config.python_path, options.signal)) return config.python_path!;
@@ -55,7 +57,7 @@ async function bootstrap(options: OperationOptions): Promise<string> {
     await installAceteamNodes(managedPython, options);
   }
   if (!await isAceteamNodesReady(managedPython, options.signal)) {
-    throw new Error("Ace workflow runtime installation did not pass its CLI readiness check");
+    throw new Error("Ace workflow runtime installation did not pass its version and import readiness check");
   }
 
   saveConfig({ ...config, python_path: managedPython, venv_dir: venvDir });
