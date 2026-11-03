@@ -273,9 +273,9 @@ export class PlatformClient {
       }
       return deepFreeze({
         workflowId,
-        title: safeText(title),
-        ...(optionalText(entry.description) ? { description: safeText(entry.description as string, 4096) } : {}),
-        ...(optionalText(entry.template_category) ? { category: safeText(entry.template_category as string) } : {}),
+        title: this.#safeText(title),
+        ...(optionalText(entry.description) ? { description: this.#safeText(entry.description as string, 4096) } : {}),
+        ...(optionalText(entry.template_category) ? { category: this.#safeText(entry.template_category as string) } : {}),
         versionNumber,
       });
     });
