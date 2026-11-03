@@ -142,6 +142,14 @@ function validTimeout(value: number, name: string): number {
   return value;
 }
 
+function requireFirstPartyBaseUrl(baseUrl: unknown): void {
+  if (baseUrl !== undefined && baseUrl !== "" && baseUrl !== "https://api.anthropic.com" &&
+      baseUrl !== "https://api.anthropic.com/") {
+    throw new ClaudeAdapterError("claude_authentication_route_unsupported",
+      "Claude Agent currently supports the default first-party Anthropic API endpoint only. Remove alternate base URL settings.");
+  }
+}
+
 function routeEnvironment(environment: Environment): Environment {
   if (!environment.ANTHROPIC_API_KEY?.trim()) {
     throw new ClaudeAdapterError("claude_authentication_required", "Claude Agent requires ANTHROPIC_API_KEY in the environment.");
@@ -154,6 +162,7 @@ function routeEnvironment(environment: Environment): Environment {
     throw new ClaudeAdapterError("claude_authentication_route_unsupported",
       "Claude Agent currently supports first-party ANTHROPIC_API_KEY authentication only. Remove conflicting OAuth, bearer, or cloud-provider route settings.");
   }
+  requireFirstPartyBaseUrl(environment.ANTHROPIC_BASE_URL);
   return { ...environment };
 }
 
@@ -344,6 +353,10 @@ export class ClaudeNativeHarnessAdapter implements NativeHarnessAdapter {
       } catch {
         throw new ClaudeAdapterError("claude_settings_resolution_failed", "Claude Agent settings could not be resolved safely. Fix native settings before opening this session.");
       }
+      // Settings can route the native process just like the inherited environment.
+      // Check before opening a query; firstParty account metadata does not prove its destination.
+      const settingsEnvironment = object(resolved.effective.env) ? resolved.effective.env : {};
+      requireFirstPartyBaseUrl(settingsEnvironment.ANTHROPIC_BASE_URL);
       if (hasPolicyHelper(resolved)) {
         throw new ClaudeAdapterError("claude_policy_helper_unsupported", "Claude Agent policyHelper is configured, but this adapter cannot execute it during permission resolution.");
       }
