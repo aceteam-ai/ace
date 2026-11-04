@@ -1,31 +1,112 @@
+import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { Command } from "commander";
-import { fabricCommand } from "./commands/fabric.js";
+import { Command, CommanderError } from "commander";
 import { initCommand } from "./commands/init.js";
-import { loginCommand } from "./commands/login.js";
-import { runCommand } from "./commands/run.js";
 import { workflowCommand } from "./commands/workflow.js";
-import { startInteractive } from "./commands/interactive.js";
+import { fabricCommand } from "./commands/fabric.js";
+import { runCommand } from "./commands/run.js";
+import { loginCommand, logoutCommand } from "./commands/login.js";
+import { mcpCommand, orgCommand, whoamiCommand } from "./commands/control-plane.js";
+import { addCompletionCommands } from "./commands/completion.js";
+import { agentCommand } from "./commands/agent.js";
+import { beginLegacyOutput, finishLegacyOutput } from "./utils/legacy-output.js";
+import { CliError } from "./utils/control-plane.js";
+
+function addOutputOptions(command: Command): void {
+  const options = command.options.map((option) => option.long);
+  if (!options.includes("--json")) command.option("--json", "Output JSON");
+  if (!options.includes("--quiet")) command.option("--quiet", "Suppress successful output");
+  for (const child of command.commands) addOutputOptions(child);
+}
+
+function configureErrorHandling(command: Command): void {
+  command.exitOverride();
+  command.configureOutput({
+    writeOut: (value) => process.stdout.write(value),
+    writeErr: (value) => {
+      if (!process.argv.includes("--json")) process.stderr.write(value);
+    },
+  });
+  for (const child of command.commands) configureErrorHandling(child);
+}
 
 export function createProgram(): Command {
   const program = new Command();
-  program.name("ace").description("AceTeam CLI - Run AI workflows locally").version("0.3.0");
+
+  program
+    .name("ace")
+    .description("AceTeam CLI for the control plane and local workflows")
+    .version("0.3.0")
+    .enablePositionalOptions()
+    .option("--json", "Output JSON")
+    .option("--quiet", "Suppress successful output");
+
   program.addCommand(initCommand);
   program.addCommand(runCommand);
   program.addCommand(workflowCommand);
   program.addCommand(fabricCommand);
   program.addCommand(loginCommand);
+  program.addCommand(logoutCommand);
+  program.addCommand(whoamiCommand);
+  program.addCommand(orgCommand);
+  program.addCommand(mcpCommand);
+  program.addCommand(agentCommand);
+  addCompletionCommands(program);
+
+  addOutputOptions(program);
+  configureErrorHandling(program);
+  program.hook("preAction", (_root, action) => beginLegacyOutput(action));
+  program.hook("postAction", () => {
+    finishLegacyOutput();
+  });
   return program;
 }
 
 export async function main(argv = process.argv): Promise<void> {
   if (argv.length === 2) {
-    if (process.stdin.isTTY && process.stdout.isTTY) await startInteractive();
-    else createProgram().outputHelp();
+    if (process.stdin.isTTY && process.stdout.isTTY) {
+      const { startInteractive } = await import("./commands/interactive.js");
+      await startInteractive();
+    } else {
+      createProgram().outputHelp();
+    }
     return;
   }
-  await createProgram().parseAsync(argv);
+  const program = createProgram();
+  try {
+    await program.parseAsync(argv);
+  } catch (error) {
+    if (!finishLegacyOutput(error)) {
+      if (error instanceof CliError) {
+        process.exitCode = error.exitCode;
+        if (process.argv.includes("--json")) {
+          console.error(JSON.stringify({ error: { code: error.exitCode, message: error.message } }));
+        } else {
+          console.error("Error: " + error.message);
+        }
+      } else if (error instanceof CommanderError) {
+        if (error.code === "commander.helpDisplayed" || error.code === "commander.version") {
+          process.exitCode = 0;
+        } else {
+          process.exitCode = 2;
+          if (process.argv.includes("--json")) {
+            console.error(JSON.stringify({ error: { code: 2, message: error.message } }));
+          }
+        }
+      } else {
+        throw error;
+      }
+    }
+  }
 }
 
-const entry = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;
-if (entry === import.meta.url) await main();
+export function isMainModule(moduleUrl: string, argvPath = process.argv[1]): boolean {
+  if (!argvPath) return false;
+  try {
+    return pathToFileURL(realpathSync(argvPath)).href === moduleUrl;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule(import.meta.url)) await main();

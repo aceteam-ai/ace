@@ -1,14 +1,14 @@
 # @aceteam/ace
 
 [![npm version](https://img.shields.io/npm/v/@aceteam/ace.svg)](https://www.npmjs.com/package/@aceteam/ace)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![License: Elastic-2.0](https://img.shields.io/badge/License-Elastic--2.0-green.svg)](LICENSE)
 
-AceTeam CLI - Run AI workflows locally from your terminal.
+AceTeam CLI for the control plane and local workflows.
 
 ## Install
 
 ```bash
-# From npm
+# From npm (once published)
 npm install -g @aceteam/ace
 
 # Or run without installing
@@ -24,21 +24,87 @@ npm link                    # or install globally as `ace`
 
 ## Quick Start
 
-Run `ace` (or `npx @aceteam/ace`) to open the task picker immediately. No setup wizard or provider login is required to browse. Without a configured local provider, supported tasks show clearly labeled prerecorded samples; no model is called.
-
 ```bash
-# Open the terminal workspace
-ace
+# 1. Set up Python venv, install dependencies, create config
+ace init
 
-# Or summarize text directly with your configured provider
-ace run "Explain AI in one sentence"
+# 2. Browse available workflow templates
+ace workflow list-templates
 
-# Create and run a workflow from the command line
+# 3. Create a workflow from a template
 ace workflow create hello-llm -o my-workflow.json
+
+# 4. Run it
 ace workflow run my-workflow.json --input prompt="Explain AI in one sentence"
 ```
 
-The first live local run provisions Python and workflow dependencies as needed. Progress appears in the workspace, and Esc cancels the operation. Browse with arrow keys, use Enter to select, and open keyboard help with `?` (Tab while entering text). Settings and provider setup are available from the home menu.
+## Control plane
+
+`ace login` opens the provider menu. Choose AceTeam Fabric to configure the
+existing local workflow runner, or AceTeam control plane for browser
+authorization. `ace login --browser` goes directly to browser authorization.
+After approving the connection, the CLI saves a renewable session in
+`~/.ace/config.yaml`. Select the
+multi-org checkbox on the consent screen if you need `ace org use`. A single-org
+API key also works for read and tool calls:
+
+```bash
+ace login --browser
+ace whoami --json
+ace org list
+ace org use "My organization"
+ace mcp --list forge
+ace mcp --schema forge_pr_list --json
+ace mcp forge_pr_list --json '{"owner":"aceteam-ai","repo":"ace"}'
+printf '%s\n' '{"owner":"aceteam-ai","repo":"ace"}' | ace mcp forge_pr_list --json -
+ace mcp forge_pr_list --arg owner=aceteam-ai --arg repo=ace
+ace agent list
+ace agent ask "Researcher" "Summarize this week's customer feedback"
+ace logout
+
+# For a single organization in a script. The key also configures Fabric.
+ace login --api-key-env ACETEAM_API_KEY
+```
+
+API-key connections cannot switch organizations. Browser login with multi-org
+consent is required for `ace org use`. The selected organization is restored
+on later commands, including after an OAuth token refresh. API-key login saves
+the Fabric credential even if control-plane verification fails, then exits
+with an error so a script does not mistake the control-plane session for ready.
+
+`ace agent ask` sends one independent, governed turn to the selected agent.
+Use an agent ID from `ace agent list` if names collide. The control plane
+returns the response or its approval status when the turn finishes; the current
+agent MCP tool does not stream tokens or keep a conversation history.
+
+`--json` emits machine-readable output on every command, and `--quiet`
+suppresses successful output. For `ace mcp`, `--json` alone selects JSON
+output; `--json '{...}'` supplies tool arguments, and `--json -` reads a JSON
+object from standard input (up to 1 MiB). Invalid input exits
+with status 2, authentication failures with 3, and control-plane failures
+with 4. The config file is restricted to its owner. Set `ACE_CONFIG_DIR`
+to use a different config directory. A custom `--mcp-url` requires HTTPS,
+except for a local HTTP server on `localhost`, `127.0.0.1`, or `::1`.
+Commands that prompt for input require normal terminal output.
+
+Shell completion is available for Bash, Zsh, and Fish. Add the matching line
+to your shell setup, or save the Fish script to its completion directory:
+
+```bash
+eval "$(ace completion bash)" # ~/.bashrc
+eval "$(ace completion zsh)"  # ~/.zshrc
+ace completion fish > ~/.config/fish/completions/ace.fish
+```
+
+In Zsh, run `compinit` before the `eval` line so `compdef` is available.
+
+Completion suggests commands and flags from the installed CLI. Use
+`ace mcp --list` to discover live tool names.
+
+The first live local run provisions Python and workflow dependencies as needed.
+Progress appears in the workspace, and Esc cancels the operation. Browse with
+arrow keys, use Enter to select, and open keyboard help with `?` (Tab while
+entering text). Settings and provider setup are available from the home menu.
 
 For a native coding conversation, press Esc and choose **Native coding session**. Select Codex and a workspace, then start a new session or explicitly resume a saved one using its own sign-in and permissions, with conversation, activity, changes, and explicit approval panels. See [native session controls and requirements](docs/native-sessions.md).
 
@@ -48,8 +114,8 @@ For a native coding conversation, press Esc and choose **Native coding session**
 ```
 ace CLI (TypeScript)
   │
-  ├── ace ──────────────────> Open task picker and offline samples
-  │                            provision runtime on first live run
+  ├── ace init ──────────────> Detect Python 3.12+, create ~/.ace/venv,
+  │                            install aceteam-nodes, save config
   │
   ├── ace workflow create ──> Pick a bundled template, customize params,
   │                            write workflow JSON
@@ -71,17 +137,14 @@ The TypeScript CLI handles file validation, Python detection, and output formatt
 ## Requirements
 
 - Node.js 18+
-- A terminal for the interactive workspace; explicit CLI commands also support non-TTY use
-- Network access for first-time runtime provisioning; Python 3.12+ is provisioned through uv when needed
-- An LLM provider — cloud API key **or** a local model server — for live LLM workflows (see below)
-
-Ace reuses an available uv installation or downloads its pinned official installer (0.12.12), checks its SHA-256 digest, and installs it under `~/.ace/bin`. The managed environment pins `aceteam-nodes[llm]==0.5.1` and `aceteam-workflow-engine==2.0.0rc8`: newer aceteam-nodes releases removed the CLI entry point used here. Runtime setup is unnecessary for browsing, offline samples, or native harness sessions.
+- Python 3.12+ (for workflow execution)
+- An LLM provider — cloud API key **or** a local model server (see below)
 
 ## Commands
 
 ### `ace init`
 
-Optional explicit setup; ordinary task-picker startup skips this wizard. It:
+Interactive setup that:
 1. Detects Python 3.12+ (shows specific version error if too old)
 2. Creates a managed virtual environment at `~/.ace/venv/`
 3. Installs `aceteam-nodes` into the venv
@@ -184,6 +247,64 @@ Discover available Citadel nodes on the Fabric.
 Show connected node load metrics.
 
 ## Using Local LLMs (Ollama, vLLM, etc.)
+
+### Observe an OpenAI-compatible node through the AEP proxy
+
+Set the upstream URL before running `ace init`. The URL must be reachable from
+the proxy container. Use a node hostname or container-accessible host address,
+not a loopback address such as `localhost` or `127.0.0.1`. The proxy accepts
+one upstream at a time.
+
+For a model server on your own machine, including Ollama or LiteLLM, use
+`http://host.docker.internal:<port>/v1` as the upstream. On Linux, Docker needs
+`--add-host=host.docker.internal:host-gateway`; `ace init` adds that mapping
+when it starts a Docker proxy for this host. Use the same option in a manual
+`docker run` command. Podman can use `host.containers.internal` instead.
+
+```bash
+export UPSTREAM_OPENAI_BASE_URL=http://node.internal:8000/v1
+ace init
+```
+
+Then point the coding agent at the local proxy:
+
+```bash
+export OPENAI_BASE_URL=http://localhost:8899/v1
+```
+
+Requests sent through that URL appear in the local AEP dashboard at
+`http://localhost:8899/dashboard/`. The proxy appends the request path, so
+`ace init` removes a trailing `/v1` from the upstream base URL before passing
+it to the container. A custom Anthropic endpoint can use
+`UPSTREAM_ANTHROPIC_BASE_URL` and an agent-side `ANTHROPIC_BASE_URL` instead.
+
+For compatibility, `ace init` also accepts `OPENAI_BASE_URL` or
+`ANTHROPIC_BASE_URL` as the upstream before the agent is pointed at the proxy.
+The `UPSTREAM_` names take precedence, avoiding a loop when the agent's base
+URL already points to `localhost:8899`. If a standard base URL points back to
+the proxy or both standard base URLs are set, `ace init` warns and uses the
+default proxy target. Invalid or competing `UPSTREAM_` URLs stop proxy startup
+until corrected. An existing proxy keeps its current target until it is
+stopped and started again.
+
+For a custom upstream, the proxy forwards the coding agent's authentication
+header by default. To have the proxy use the provider key from the host
+environment instead, set `ACE_PROXY_FORWARD_PROVIDER_KEY=1` before `ace init`.
+The selected provider's key is passed as `AEP_TARGET_API_KEY` and, for
+compatibility with older images, under the provider variable the image reads.
+The value is not included in the container command arguments. When a standard
+`OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL` points exactly to that provider's
+official API host, `ace init` forwards its matching key automatically. It
+prints the selected target and source variable before startup.
+
+If automatic startup fails, the equivalent manual container command for the
+example node is:
+
+```bash
+docker run -d --name safeclaw-proxy -p 8899:8899 \
+  ghcr.io/aceteam-ai/aep-proxy:latest \
+  proxy --port 8899 --host 0.0.0.0 --target http://node.internal:8000
+```
 
 Workflows use [litellm](https://docs.litellm.ai/) under the hood, which supports 100+ LLM providers — including local model servers. No API key needed for local models.
 
