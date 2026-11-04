@@ -1,7 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Command } from "commander";
 
+const commandMocks = vi.hoisted(() => ({
+  runRemotePlatformTemplate: vi.fn(),
+  formatRemotePlatformResult: vi.fn(() => "remote result"),
+}));
+
 // Mock dependencies
+vi.mock("../../src/commands/templates.js", () => ({
+  runRemotePlatformTemplate: commandMocks.runRemotePlatformTemplate,
+  formatRemotePlatformResult: commandMocks.formatRemotePlatformResult,
+}));
+
 vi.mock("../../src/utils/ensure-python.js", () => ({
   ensurePython: vi.fn(() => Promise.resolve("/usr/bin/python3")),
 }));
@@ -112,6 +122,85 @@ describe("runCommand", () => {
 });
 
 describe("named graph input validation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("rejects --remote named tasks before starting local execution", async () => {
+    const { ensurePython } = await import("../../src/utils/ensure-python.js");
+    const { runWorkflow } = await import("../../src/utils/python.js");
+    const { loadConfig } = await import("../../src/utils/config.js");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const previousExitCode = process.exitCode;
+    try {
+      await runCommand.parseAsync([
+        "node",
+        "ace",
+        "summarize",
+        "Synthetic text",
+        "--remote",
+      ]);
+
+      expect(process.exitCode).toBe(1);
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining("platform template UUID")
+      );
+      expect(ensurePython).not.toHaveBeenCalled();
+      expect(loadConfig).not.toHaveBeenCalled();
+      expect(runWorkflow).not.toHaveBeenCalled();
+    } finally {
+      process.exitCode = previousExitCode;
+      runCommand.setOptionValue("remote", undefined);
+      write.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it("rejects --model for a remote platform UUID before config or runtime work", async () => {
+    const { ensurePython } = await import("../../src/utils/ensure-python.js");
+    const { loadConfig } = await import("../../src/utils/config.js");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const previousExitCode = process.exitCode;
+    try {
+      await runCommand.parseAsync(["node", "ace", "11111111-2222-4333-8444-555555555555", "--remote", "--model", "local-model"]);
+      expect(process.exitCode).toBe(1);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("server-owned"));
+      expect(loadConfig).not.toHaveBeenCalled();
+      expect(ensurePython).not.toHaveBeenCalled();
+      expect(commandMocks.runRemotePlatformTemplate).not.toHaveBeenCalled();
+    } finally {
+      process.exitCode = previousExitCode;
+      runCommand.setOptionValue("remote", undefined);
+      runCommand.setOptionValue("model", undefined);
+      error.mockRestore();
+    }
+  });
+
+  it("returns a nonzero status for a structured remote failure in JSON mode", async () => {
+    commandMocks.runRemotePlatformTemplate.mockResolvedValueOnce({
+      status: "failed",
+      runId: "run-failed",
+      workflowVersionId: "version-3",
+      output: {},
+      error: { workflowErrors: [], nodeErrors: { llm: [null] } },
+    });
+    commandMocks.formatRemotePlatformResult.mockReturnValueOnce('{"status":"failed"}');
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const previousExitCode = process.exitCode;
+    try {
+      await runCommand.parseAsync(["node", "ace", "11111111-2222-4333-8444-555555555555", "--remote", "--json", "--input", "prompt=hello"]);
+      expect(process.exitCode).toBe(1);
+      expect(commandMocks.runRemotePlatformTemplate).toHaveBeenCalledTimes(1);
+    } finally {
+      process.exitCode = previousExitCode;
+      runCommand.setOptionValue("remote", undefined);
+      runCommand.setOptionValue("json", undefined);
+      runCommand.setOptionValue("input", []);
+      write.mockRestore();
+    }
+  });
+
   it("rejects required named inputs before bootstrapping Python", async () => {
     const { existsSync, readFileSync } = await import("node:fs");
     const { ensurePython } = await import("../../src/utils/ensure-python.js");

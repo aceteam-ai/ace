@@ -22,6 +22,9 @@ import { loadConfig } from "../utils/config.js";
 import { FabricClient } from "../utils/fabric.js";
 import { classifyPythonError, classifyWorkflowError } from "../utils/errors.js";
 import { validateNodeTypes } from "../utils/node-cache.js";
+import { formatPlatformError, formatRemotePlatformResult, runRemotePlatformTemplate } from "./templates.js";
+import { isPlatformTemplateId } from "../platform/service.js";
+import { withCommandSignal } from "../utils/command-signal.js";
 import * as output from "../utils/output.js";
 
 function parseInputArgs(inputs: string[]): Record<string, string> {
@@ -199,6 +202,44 @@ export const runCommand = new Command("run")
         inlineText,
         Boolean(options.file || options.inputDir)
       ));
+
+      if (options.remote && !isWorkflowFile(patternName)) {
+        if (!isPlatformTemplateId(patternName)) {
+          output.error("--remote requires a platform template UUID or workflow .json file.");
+          process.exitCode = 1;
+          return;
+        }
+        if (options.model) {
+          output.error("--model is not supported for platform templates; the reviewed graph and model are server-owned.");
+          process.exitCode = 1;
+          return;
+        }
+        if (options.file || options.inputDir || options.outputDir || options.config) {
+          output.error("Platform template runs accept inline prompt text or --input key=value values.");
+          process.exitCode = 1;
+          return;
+        }
+        const remoteInputs = [...options.input];
+        if (inlineText !== undefined) remoteInputs.push(`prompt=${inlineText}`);
+        await withCommandSignal(async (signal) => {
+          const spinner = ora("Loading authorized platform template...").start();
+          try {
+            const result = await runRemotePlatformTemplate(patternName, remoteInputs, {
+              signal,
+              onProgress: (message) => { spinner.text = message; },
+            });
+            spinner.stop();
+            writeOutput(formatRemotePlatformResult(result, Boolean(options.json)), options.output);
+            if (result.status !== "completed") process.exitCode = 1;
+            if (result.lowCredits) output.warn("Platform credits are running low.");
+          } catch (err) {
+            spinner.fail("Platform template run failed");
+            output.error(formatPlatformError(err));
+            process.exitCode = 1;
+          }
+        });
+        return;
+      }
 
       // ── Workflow mode (.json file) ─────────────────────
       if (isWorkflowFile(patternName)) {
