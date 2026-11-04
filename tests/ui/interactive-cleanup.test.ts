@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 const render = vi.hoisted(() => vi.fn());
 vi.mock("ink", async (original) => ({ ...await original<typeof import("ink")>(), render }));
+import type { LauncherAction } from "../../src/launcher.js";
 import { startInteractive } from "../../src/commands/interactive.js";
 
 function streams(tty = true) {
@@ -15,6 +16,24 @@ describe("interactive native teardown", () => {
     render.mockReset(); const { options } = streams(false); const dispose = vi.fn(async () => {});
     await expect(startInteractive({ ...options, panels: [{ id: "fixture", title: "Fixture", description: "Fixture", render: () => null, dispose }] })).rejects.toThrow("needs a TTY");
     expect(render).not.toHaveBeenCalled(); expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it("restores the terminal before running an external harness", async () => {
+    render.mockReset();
+    const { input, output, options } = streams();
+    const action: LauncherAction = { kind: "launch", harness: { id: "dummy", name: "Dummy", description: "Fixture", detect: "dummy", launch: { command: "dummy", args: [] } } };
+    render.mockImplementationOnce((element: { props: { onExternalAction: (action: LauncherAction) => void } }) => {
+      input.isRaw = true;
+      element.props.onExternalAction(action);
+      return { waitUntilExit: async () => {}, unmount: vi.fn() };
+    });
+    const runAction = vi.fn(async () => {
+      expect(input.setRawMode).toHaveBeenLastCalledWith(false);
+      expect(output.write).toHaveBeenLastCalledWith(expect.stringContaining("?1049l"));
+      return 0;
+    });
+    await startInteractive({ ...options, panels: [], runAction });
+    expect(runAction).toHaveBeenCalledWith(action, expect.objectContaining({ stdin: input, stdout: output }));
   });
 
   it("awaits all native cleanup and restores the terminal after a render error", async () => {
