@@ -138,6 +138,7 @@ class ManagedAdapter implements NativeHarnessAdapter {
   }
 
   private async performOpen(session: ManagedSession, command: StartSessionCommand | ResumeSessionCommand): Promise<NativeHarnessCommandResult<NativeHarnessSessionIdentity>> {
+    let nativeOpenFailed = false;
     try {
       const expectedWorkspace = await captureWorkspaceIdentity(command.workspace);
       session.expectedWorkspace = expectedWorkspace;
@@ -157,7 +158,9 @@ class ManagedAdapter implements NativeHarnessAdapter {
       session.nativeStarted = true;
       const result = command.type === "session.start" ? await this.adapter.start(command) : await this.adapter.resume(command);
       if (result.status !== "ok") {
-        session.nativeStarted = false; // Failed native opens finish their owned-resource cleanup before returning.
+        // An adapter can report failure while still owning a native resource.
+        // Keep the lease until disposal confirms cleanup or confirms no session exists.
+        nativeOpenFailed = true;
         return result;
       }
       // A late success is a new cleanup obligation even if an earlier startup disposal was acknowledged.
@@ -199,7 +202,7 @@ class ManagedAdapter implements NativeHarnessAdapter {
       return failed(error);
     } finally {
       if (session.opening) {
-        if (session.nativeStarted) await this.closeNative(session);
+        if (session.nativeStarted) await this.closeNative(session, nativeOpenFailed);
         await this.release(session);
         if (session.cancelled) await this.removeCancelledRegistration(session);
         if (this.current === session && !session.nativeStarted) this.current = undefined;
@@ -375,7 +378,7 @@ class ManagedAdapter implements NativeHarnessAdapter {
       identity.sessionId === session.identity?.sessionId && identity.nativeSessionId === session.identity?.nativeSessionId);
   }
 
-  private closeNative(session: ManagedSession): Promise<boolean> {
+  private closeNative(session: ManagedSession, allowMissingAfterFailedOpen = false): Promise<boolean> {
     if (!session.nativeStarted) return Promise.resolve(true);
     if (session.closing) return session.closing;
     const generation = session.nativeGeneration;
@@ -390,6 +393,12 @@ class ManagedAdapter implements NativeHarnessAdapter {
       }
       catch (error) { this.report(error); return false; }
       if (result.status === "ok") {
+        if (session.nativeGeneration === generation) session.nativeStarted = false;
+        return session.nativeGeneration === generation;
+      }
+      if (allowMissingAfterFailedOpen && result.status === "rejected" && result.code === "invalid_session") {
+        // The failed open left no adapter session to dispose. A failed cleanup
+        // returns an error instead and must retain the managed ownership lease.
         if (session.nativeGeneration === generation) session.nativeStarted = false;
         return session.nativeGeneration === generation;
       }
