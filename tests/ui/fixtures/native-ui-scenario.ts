@@ -1,10 +1,10 @@
-import { FakeNativeHarnessAdapter } from "../../../src/harness/fake.js";
+import { FakeNativeHarnessAdapter, type FakeNativeHarnessAdapterOptions } from "../../../src/harness/fake.js";
 import type { NativeHarnessEventListener, ObserveSessionCommand, RespondToApprovalCommand, SendInputCommand } from "../../../src/harness/types.js";
 
 /** Offline UI fixture. Never launches Codex, reads authentication, or executes a command. */
 export class SyntheticNativeAdapter extends FakeNativeHarnessAdapter {
   private turns = new Map<string, number>();
-  constructor() { super({ adapterId: "synthetic-codex" }); }
+  constructor(options: FakeNativeHarnessAdapterOptions = {}) { super({ adapterId: "synthetic-codex", ...options }); }
   override observe(command: ObserveSessionCommand, listener: NativeHarnessEventListener) {
     const result = super.observe(command, listener);
     if (result.status === "ok") this.emit(command.session, { type: "session.state", state: "ready", nativeDetails: {
@@ -32,7 +32,7 @@ export class SyntheticNativeAdapter extends FakeNativeHarnessAdapter {
     const turn = this.turns.get(command.session.sessionId)!;
     this.emit(command.session, { type: "tool.activity", toolCallId: "command", name: "commandExecution", state: "completed", output: "Synthetic checks passed; no process executed." });
     this.emit(command.session, { type: "worker.status", workerId: "observed-helper", label: "Synthetic observed helper", state: "completed" });
-    this.emit(command.session, { type: "turn.completed", nativeTurnId: `native-${command.session.sessionId}:turn-${turn}`, outcome: "completed" });
+    this.emit(command.session, { type: "turn.completed", nativeTurnId: `${command.session.nativeSessionId}:turn-${turn}`, outcome: "completed" });
     return result;
   }
 }
