@@ -17,7 +17,9 @@ before registration or publishing the opening result. Registration failure leave
 the already-created native session usable with an actionable notice; no native
 start or turn is repeated. An ownership collision or unknown ownership closes the
 new connection. A native adapter that opens without a confirmed native ID remains
-usable with an explicit registration-unavailable notice; Ace never guesses an ID.
+usable with a normal pending-confirmation status; Ace never guesses an ID. A matching
+[confirmation hook](native-confirmation-contract.md) acquires ownership and registers
+the confirmed identity once. Successful registration clears the pending status.
 
 `listCandidates(workspace)` reads only bounded local registrations. It checks the
 configured provider's resume capability, canonical workspace identity, and local

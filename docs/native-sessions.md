@@ -1,12 +1,19 @@
 # Native coding sessions in the terminal workspace
 
 Run `ace`, press Esc to open the home menu, and choose **Native coding session**.
-Select Codex, check or edit the workspace directory, then press Enter. Choose **Start new session** or **Resume saved session**.
-The panel uses your installed Codex CLI and its own sign-in, model, configuration,
-and permissions. Browsing and native sessions require neither Python setup nor
+Select a native provider, check or edit the workspace directory, then press Enter. Choose **Start new session** or **Resume saved session**.
+Codex uses your installed CLI and its own sign-in, model, configuration, and
+permissions. Claude Agent uses its SDK runtime, the supported environment API-key
+route, and Claude native permission settings; it does not use Codex sign-in. The
+shared panels preserve each provider's native permission details and supported actions. Browsing and native sessions require neither Python setup nor
 an AceTeam account. This integration currently validates exactly Codex CLI
 `0.153.4`; missing installation, unsupported versions, and missing native sign-in
 produce an actionable error. Sign in separately using `codex login` if needed.
+
+Claude may become ready for input before its first native session identity is
+confirmed. This is a normal pending state, and Ace saves no guessed ID. The first
+matching native confirmation updates command routing and local registration; a
+successful registration clears that pending status.
 
 A ready session accepts text with Enter or Tab. Enter sends it as a new turn on
 the same native thread. While typing, `?` and `q` are ordinary text; Tab or Esc
@@ -50,10 +57,10 @@ on normal exit, interruption, and render errors.
 
 ## Saved sessions and recovery
 
-A successfully opened native session is registered locally for later explicit
+A successfully opened native session with a confirmed identity is registered locally for later explicit
 resume. Open the workspace's saved-session list, select a registration, and press
 Enter. The list shows availability and reasons for unavailable records without
-starting Codex or inspecting native history. Native history, current sign-in,
+starting a native provider or inspecting native history. Native history, current sign-in,
 workspace identity, and the tested CLI version are checked on that explicit action.
 
 Resume uses a fresh local connection for the same recorded native thread. Earlier
@@ -86,8 +93,11 @@ The session panel needs at least **40 columns × 24 rows**. Smaller terminals sh
 a compact resize notice with pending-approval count; session actions are disabled
 until the panel is visible again. Esc and Ctrl+C remain available.
 
-Arbitrary attach/import, external-message intake, and cross-provider state transfer
-are not exposed here. Only locally registered Ace-created sessions can be selected.
+Only locally registered Ace-created sessions can be resumed. For a fresh conversation
+with selected context, use the [reviewed local handoff](native-handoff.md): press `h`
+in the provider chooser, load a bounded JSON summary, review every page, and explicitly
+confirm the new target session. This does not transfer native history or permissions.
+External-message intake and arbitrary native attach remain unavailable.
 See the [adapter](codex-adapter.md) and [reviewed turn lifecycle amendment](native-turn-lifecycle.md)
 for native protocol and authority boundaries.
 
