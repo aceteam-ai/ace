@@ -125,29 +125,17 @@ describe("installAceteamNodes", () => {
 
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "/usr/bin/uv",
-      ["pip", "install", "aceteam-nodes[llm]", "--python", "/home/user/.ace/venv/bin/python"],
+      ["pip", "install", "aceteam-nodes[llm]==0.5.1", "aceteam-workflow-engine==2.0.0rc8", "--python", "/home/user/.ace/venv/bin/python"],
       { stdio: ["ignore", "inherit", "inherit"] }
     );
   });
 
-  it("falls back to python -m pip when uv unavailable", async () => {
+  it("never falls back to pip on an unmanaged interpreter", async () => {
     mockWhich.mockRejectedValue(new Error("not found"));
 
-    await installAceteamNodes("/home/user/.ace/venv/bin/python");
-
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      "/home/user/.ace/venv/bin/python",
-      ["-m", "pip", "install", "aceteam-nodes[llm]"],
-      { stdio: ["ignore", "inherit", "inherit"] }
+    await expect(installAceteamNodes("/usr/bin/python3")).rejects.toThrow(
+      "uv is required"
     );
-  });
-
-  it("does not inherit stdin (prevents readline conflicts)", async () => {
-    mockWhich.mockRejectedValue(new Error("not found"));
-
-    await installAceteamNodes("/usr/bin/python3");
-
-    const [, , opts] = mockExecFileSync.mock.calls[0];
-    expect((opts as { stdio: unknown[] }).stdio[0]).toBe("ignore");
+    expect(mockExecFileSync).not.toHaveBeenCalled();
   });
 });

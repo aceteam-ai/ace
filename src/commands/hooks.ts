@@ -28,19 +28,20 @@ function bindingLabel(event: string, group: Group, hook: JsonObject): string {
 export function livenessHooks(harness: Harness, machine = hostname(), name?: string): HookConfig {
   const registration: JsonObject = {
     harness, machine, cwd: "${cwd}", permission_mode: "${permission_mode}", presence_interval_s: 300,
-    ...(harness === "codex" ? { harness_session_id: "${session_id}" } : {}),
+    harness_session_id: "${session_id}",
     ...(name ? { name } : {}),
   };
   const handler = (tool: string, input: JsonObject, timeout = 1.5): Handler => ({ type: "mcp_tool", server: "aceteam", tool, input, timeout: harness === "codex" ? Math.ceil(timeout) : timeout });
   const group = (hook: Handler, matcher?: string): Group => ({ ...(matcher ? { matcher } : {}), hooks: [hook] });
   const hooks: Record<string, Group[]> = {
-    SessionStart: [group(handler("session_heartbeat", registration, 3))],
     UserPromptSubmit: [group(handler("session_heartbeat", { ...registration, state: "busy" }, 3))],
     PostToolUse: [group(handler("session_heartbeat", { state: "busy" }))],
     Stop: [group(handler("session_inbox", { drain: true, format: "hook", idle_on_empty: true, ...(harness === "codex" ? { harness_session_id: "${session_id}" } : {}) }, 10))],
-    SessionEnd: [group(handler("session_unregister", {}))],
+    SessionEnd: [group(handler("session_unregister", { harness_session_id: "${session_id}" }))],
   };
-  if (harness === "claude-code") {
+  if (harness === "codex") {
+    hooks.SessionStart = [group(handler("session_heartbeat", registration, 3))];
+  } else {
     hooks.Notification = [
       group(handler("session_heartbeat", { state: "blocked", blocked_on: "human:permission", reason: "Waiting for operator permission" }), "permission_prompt"),
       group(handler("session_heartbeat", { state: "blocked", blocked_on: "human:input", reason: "Waiting for operator input" }), "elicitation_dialog"),
@@ -71,6 +72,17 @@ function parseConfig(text: string): HookConfig {
 export function mergeHooks(existing: HookConfig, desired: HookConfig): { config: HookConfig; changes: string[] } {
   const config = structuredClone(existing);
   const changes: string[] = [];
+  if (!desired.hooks.SessionStart && config.hooks.SessionStart) {
+    config.hooks.SessionStart = config.hooks.SessionStart.flatMap(group => {
+      const hooks = group.hooks.filter(hook => {
+        const installed = hook.type === "mcp_tool" && hook.server === "aceteam" && (hook.tool === "session_heartbeat" || hook.tool === "session_register");
+        if (installed) changes.push(`remove SessionStart ${String(hook.tool)}`);
+        return !installed;
+      });
+      return hooks.length ? [{ ...group, hooks }] : [];
+    });
+    if (!config.hooks.SessionStart.length) delete config.hooks.SessionStart;
+  }
   for (const [event, desiredGroups] of Object.entries(desired.hooks)) {
     const groups = config.hooks[event] ??= [];
     for (const desiredGroup of desiredGroups) {
@@ -174,6 +186,6 @@ for (const operation of ["install", "status"]) {
       const lines = operation === "install" ? await installHooks(options.harness, options.scope, options.name) : await hooksStatus(options.harness, options.scope);
       process.stdout.write(`${lines.join("\n")}\n`);
       if (operation === "install" && options.harness === "codex") process.stdout.write("Review and trust the installed hooks in Codex. MCP SessionEnd hooks are currently unsupported.\n");
-    } catch (error) { command.error(error instanceof HookConfigError ? error.message : "Unable to read or install hook configuration."); }
+    } catch (error) { command.error(error instanceof HookConfigError ? error.message : "Unable to read or install hook configuration.", { exitCode: 1, code: "ace.hooksConfigError" }); }
   });
 }

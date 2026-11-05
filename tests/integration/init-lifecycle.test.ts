@@ -5,6 +5,9 @@ vi.mock("node:fs", () => ({
   readFileSync: vi.fn(),
   writeFileSync: vi.fn(),
   mkdirSync: vi.fn(),
+  chmodSync: vi.fn(),
+  renameSync: vi.fn(),
+  rmSync: vi.fn(),
 }));
 
 vi.mock("node:os", () => ({

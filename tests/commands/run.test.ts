@@ -60,11 +60,26 @@ vi.mock("../../src/utils/node-cache.js", () => ({
   ),
 }));
 
-import { runCommand } from "../../src/commands/run.js";
+import { resolveFreeTextAlias, runCommand } from "../../src/commands/run.js";
 
 describe("runCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+
+  it("keeps multi-word JSON paths in workflow mode", () => {
+    expect(resolveFreeTextAlias("/tmp/my workflow.json", undefined, false)).toEqual({
+      target: "/tmp/my workflow.json",
+      inlineText: undefined,
+    });
+  });
+
+  it("maps unambiguous multi-word text to the default summarize task", () => {
+    expect(resolveFreeTextAlias("explain this sentence", undefined, false)).toEqual({
+      target: "summarize",
+      inlineText: "explain this sentence",
+    });
   });
 
   it("is a Commander command named 'run'", () => {
@@ -93,5 +108,28 @@ describe("runCommand", () => {
     expect(commandStr).toBeDefined();
     expect(commandStr).toContain("task");
     expect(commandStr).toContain("workflow");
+  });
+});
+
+describe("named graph input validation", () => {
+  it("rejects required named inputs before bootstrapping Python", async () => {
+    const { existsSync, readFileSync } = await import("node:fs");
+    const { ensurePython } = await import("../../src/utils/ensure-python.js");
+    const { BUILTIN_PATTERNS } = await import("../../src/patterns/index.js");
+    const graph = structuredClone(BUILTIN_PATTERNS[0].workflow);
+    graph.input_node.params.fields.extra = { type: "string" };
+    vi.mocked(existsSync).mockImplementation((path) => String(path).endsWith("workflow.json"));
+    vi.mocked(readFileSync).mockReturnValue(JSON.stringify(graph));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const previousExitCode = process.exitCode;
+    try {
+      await runCommand.parseAsync(["node", "ace", "summarize", "Synthetic text"]);
+      expect(ensurePython).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("named workflow inputs"));
+    } finally {
+      process.exitCode = previousExitCode;
+      error.mockRestore();
+    }
   });
 });

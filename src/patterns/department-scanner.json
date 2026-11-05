@@ -1,0 +1,50 @@
+{
+  "name": "Department Scanner",
+  "description": "Department performance analysis with metrics, gaps, and recommendations",
+  "input_node": {
+    "id": "input",
+    "type": "Input",
+    "params": {
+      "fields": {
+        "prompt": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "output_node": {
+    "id": "output",
+    "type": "Output",
+    "params": {
+      "fields": {
+        "response": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "inner_nodes": [
+    {
+      "id": "llm",
+      "type": "LLM",
+      "params": {
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a municipal performance analyst specializing in city government operations. Analyze the department information provided and produce a comprehensive performance report.\n\nYour output MUST follow this format:\n\n## Department Overview\n- **Department**: [name]\n- **Primary Mission**: [1-2 sentence summary]\n- **Staff Size**: [if mentioned]\n- **Budget**: [if mentioned]\n\n## Key Performance Metrics\n| Metric | Value | Trend | Assessment |\n|--------|-------|-------|------------|\n| [metric name] | [value] | [up/down/stable] | [good/needs attention/critical] |\n\n(include all quantitative metrics found in the input)\n\n## Strengths\n- [strength 1]\n- [strength 2]\n\n## Gaps & Concerns\n- **[Gap]**: [description and impact]\n- **[Gap]**: [description and impact]\n\n## Recommendations\n1. **[Short-term]**: [actionable recommendation]\n2. **[Medium-term]**: [actionable recommendation]\n3. **[Long-term]**: [actionable recommendation]\n\n## Risk Flags\n- [any urgent issues that need immediate attention]\n\nBase your analysis strictly on the provided data. Flag areas where data is insufficient for a complete assessment."
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source_id": "input",
+      "source_key": "prompt",
+      "target_id": "llm",
+      "target_key": "prompt"
+    },
+    {
+      "source_id": "llm",
+      "source_key": "response",
+      "target_id": "output",
+      "target_key": "response"
+    }
+  ]
+}
