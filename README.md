@@ -5,6 +5,34 @@
 
 AceTeam CLI for the control plane and local workflows.
 
+## Harness presence hooks
+
+After configuring the `aceteam` MCP server, install liveness hooks with
+`ace hooks install --harness claude-code` or `ace hooks install --harness codex`.
+User scope is the default. Add `--scope project` for one repo, or `--name`
+for a dedicated launcher. Names otherwise derive from each session's cwd.
+`ace hooks status --harness claude-code` lists bindings and checks MCP setup.
+
+The installer preserves unrelated settings and hooks, prints changed
+bindings, and reports `no changes` on a repeat run. Hooks reuse the existing
+MCP connection and contain no credentials. User input records busy; Stop
+drains pending messages before declaring idle. Both harnesses refresh busy
+presence after supported tool completions, including local tools. MCP hooks
+reuse the connection without triggering other hooks. Claude Code additionally
+observes permission and input notifications.
+These notifications need the companion blocked-state backend slice.
+
+Codex requires operator trust review before changed hooks can run. Its
+current MCP runtime does not support SessionEnd, so the configured teardown
+handler is best effort. Claude Code's SessionStart MCP hook has no client
+context and its SessionEnd MCP hook opens a fresh connection that cannot
+unregister the lease. The installer omits both Claude bindings and removes
+them from existing installations. Dead sessions age out by lease TTL until
+aceteam-ai/aceteam#14132 supplies a supported teardown path. No hook
+answers a permission or trust prompt. Live transport identity and fleet
+acceptance remain verification gates for the companion backend change,
+aceteam-ai/aceteam#10469.
+
 ## Install
 
 ```bash
