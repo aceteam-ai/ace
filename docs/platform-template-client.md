@@ -1,0 +1,58 @@
+# Platform template client
+
+Ace can browse platform workflow templates, inspect an authorized graph version, run that fetched graph locally, or submit typed input to the platform. Platform access is explicit and does not run during ordinary CLI or terminal workspace startup.
+
+## Credentials
+
+Platform templates use the control-plane session from `ace login` and the active organization selected by `ace org use`. They do not reuse Fabric or model-provider credentials.
+
+```console
+ace login --api-key-env ACETEAM_API_KEY --mcp-url https://app.example.com/mcp
+```
+
+Use `ace login --browser` for OAuth and `ace login --api-key-env` for an API key. The template catalog, selected-version detail, and remote run currently have REST routes but no equivalent MCP tools. Ace uses the shared API key from the verified control-plane session for those routes. OAuth-only sessions fail with exit 2 and instructions to log in with an API key for the selected organization; they are never sent to REST. The REST origin comes from the configured MCP URL and cannot be overridden by a separate template credential. Explicit loopback development origins may use HTTP.
+
+## Catalog and local execution
+
+```console
+ace templates list
+ace templates list --category general --json
+ace templates run 11111111-2222-4333-8444-555555555555 --input prompt="Review this"
+```
+
+The catalog supplies metadata and a positive version number. Ace then requests that exact version and validates its workflow identity and graph before collecting schema-aware input. Local execution uses the fetched graph snapshot and the managed pinned Python runtime. It reports platform-only node types as local compatibility errors and always removes its private temporary graph.
+
+Every declared input key must have a typed value or graph default. Structured values use JSON:
+
+```console
+ace templates run TEMPLATE_UUID \
+  --input count=3 \
+  --input enabled=false \
+  --input 'items=["one","two"]'
+```
+
+The platform owns the graph's model selection. Model overrides are not applied.
+
+## Remote execution
+
+```console
+ace run --remote TEMPLATE_UUID --input prompt="Review this"
+```
+
+Ace first finds the UUID in the authorized catalog, reads its selected version, validates typed input, and posts the input object to the versioned run route. The graph itself is not posted. The server-side record can change without receiving a new version identifier, so the requested version and returned version ID identify the selected record rather than promising byte-for-byte immutability during a remote run. Local execution continues to use the graph snapshot already fetched.
+
+Remote submission is never retried. Redirects are refused. Authentication, authorization, credit, and rate-limit responses remain distinct. A disconnect, malformed terminal response, server timeout, or local interruption after submission has an unknown outcome: the job may continue and consume credits. When available, Ace prints the separate run and job identifiers for investigation. A failure or cancellation event remains terminal even if a later completion frame arrives.
+
+JSON responses and bounded SSE streams are supported. SSE parsing accepts split UTF-8 and standard CR, LF, or CRLF framing. Progress is advisory; only a complete, correlated terminal envelope establishes success. `--json` still exits nonzero for failed or cancelled runs.
+
+JSON workflow files keep their existing Fabric route:
+
+```console
+ace run workflow.json --remote --input prompt="Review this"
+```
+
+Named local tasks are not treated as platform templates. Use a template UUID for platform execution.
+
+## Current boundary
+
+A listed template can still be inaccessible to the current credential. Ace does not clone it, change organization context, or submit a run as a workaround. Platform templates can also use nodes that the pinned local runtime does not support; remote execution remains available without Python compatibility checks. Catalog parity with every deployed template depends on an identified canonical seed set and separate portability validation.

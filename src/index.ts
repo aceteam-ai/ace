@@ -37,10 +37,11 @@ export async function createProgram(argv = process.argv): Promise<Command> {
   // Hook installation must remain usable without loading the interactive
   // command runtime, which requires a newer Node release.
   if (argv[2] !== "hooks") {
-    const [init, run, workflow, fabric, login, controlPlane, completion, agent] = await Promise.all([
+    const [init, run, workflow, templates, fabric, login, controlPlane, completion, agent] = await Promise.all([
       import("./commands/init.js"),
       import("./commands/run.js"),
       import("./commands/workflow.js"),
+      import("./commands/templates.js"),
       import("./commands/fabric.js"),
       import("./commands/login.js"),
       import("./commands/control-plane.js"),
@@ -50,6 +51,7 @@ export async function createProgram(argv = process.argv): Promise<Command> {
     program.addCommand(init.initCommand);
     program.addCommand(run.runCommand);
     program.addCommand(workflow.workflowCommand);
+    program.addCommand(templates.templatesCommand);
     program.addCommand(fabric.fabricCommand);
     program.addCommand(login.loginCommand);
     program.addCommand(login.logoutCommand);
