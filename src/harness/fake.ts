@@ -13,6 +13,7 @@ import {
   type NativeHarnessObservation,
   type NativeHarnessOperation,
   type NativeHarnessSessionIdentity,
+  type NativeHarnessTurnIdentity,
   type ObserveSessionCommand,
   type RespondToApprovalCommand,
   type ResumeSessionCommand,
@@ -26,11 +27,12 @@ interface FakeSession {
   listeners: Set<NativeHarnessEventListener>;
   pendingApprovals: Map<
     string,
-    { correlationId: string | undefined; choices: ReadonlySet<string>; nativeTurnId?: string }
+    { correlationId: string | undefined; choices: ReadonlySet<string>; nativeTurnId?: string; turnId?: string }
   >;
   sequence: number;
   turnCounter: number;
   nativeTurnId?: string;
+  turnId?: string;
   turnEnding: boolean;
   usedTurnIds: Set<string>;
   usedApprovalIds: Set<string>;
@@ -54,9 +56,12 @@ export interface FakeNativeHarnessAdapterOptions {
   capabilities?: Partial<NativeHarnessCapabilities>;
   now?: () => string;
   nativeSessionId?: (sessionId: string) => string;
+  turnIdentity?: "native" | "local";
 }
 
 const supported: NativeHarnessCapability = { supported: true };
+const turnKey = (value: { nativeTurnId?: string; turnId?: string }) => value.nativeTurnId ?? value.turnId;
+const requiredTurnKey = (value: NativeHarnessTurnIdentity): string => value.nativeTurnId ?? value.turnId!;
 
 function defaultCapabilities(): NativeHarnessCapabilities {
   return {
@@ -83,9 +88,11 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
   private readonly failures = new Map<NativeHarnessOperation, FakeFailure>();
   private readonly now: () => string;
   private readonly createNativeSessionId: (sessionId: string) => string;
+  private readonly turnIdentity: "native" | "local";
 
   constructor(options: FakeNativeHarnessAdapterOptions = {}) {
     this.adapterId = options.adapterId ?? "fake";
+    this.turnIdentity = options.turnIdentity ?? "native";
     this.capabilities = {
       ...defaultCapabilities(),
       ...options.capabilities,
@@ -136,14 +143,15 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
       return session;
     }
 
-    if (session.value.nativeTurnId || session.value.turnEnding || session.value.pendingApprovals.size) {
+    if (turnKey(session.value) || session.value.turnEnding || session.value.pendingApprovals.size) {
       return { status: "rejected", code: "invalid_state", message: "Input requires a ready fake session; steering is unsupported." };
     }
-    const nativeTurnId = `${session.value.identity.nativeSessionId}:turn-${++session.value.turnCounter}`;
-    this.publish(session.value, { type: "turn.started", nativeTurnId }, command.correlationId);
-    if (session.value.state === "active" && session.value.nativeTurnId === nativeTurnId) {
-      this.publish(session.value, { type: "session.state", state: "running" }, nativeTurnId);
-      if (session.value.state === "active" && session.value.nativeTurnId === nativeTurnId && !session.value.turnEnding) {
+    const id = `${this.turnIdentity === "native" ? session.value.identity.nativeSessionId : session.value.identity.sessionId}:turn-${++session.value.turnCounter}`;
+    const identity: NativeHarnessTurnIdentity = this.turnIdentity === "native" ? { nativeTurnId: id } : { turnId: id };
+    this.publish(session.value, { type: "turn.started", ...identity }, command.correlationId);
+    if (session.value.state === "active" && turnKey(session.value) === id) {
+      this.publish(session.value, { type: "session.state", state: "running" }, id);
+      if (session.value.state === "active" && turnKey(session.value) === id && !session.value.turnEnding) {
         this.publish(session.value, { type: "conversation.message", role: "user", text: command.input }, command.correlationId);
       }
     }
@@ -190,11 +198,11 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
       return session;
     }
 
-    if (!session.value.nativeTurnId || session.value.turnEnding) {
+    if (!turnKey(session.value) || session.value.turnEnding) {
       return { status: "rejected", code: "invalid_state", message: "Interrupt requires an active fake turn." };
     }
     this.completeTurn(session.value, {
-      type: "turn.completed", nativeTurnId: session.value.nativeTurnId,
+      type: "turn.completed", ...(session.value.nativeTurnId ? { nativeTurnId: session.value.nativeTurnId } : { turnId: session.value.turnId! }),
       outcome: "interrupted", nativeDetails: { reason: command.reason },
     }, command.correlationId);
     return { status: "ok", value: { accepted: true } };
@@ -309,11 +317,11 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
       return session;
     }
 
-    if (payload.type === "turn.started" && (session.value.nativeTurnId || session.value.turnEnding || session.value.usedTurnIds.has(payload.nativeTurnId))) {
+    if (payload.type === "turn.started" && (turnKey(session.value) || session.value.turnEnding || session.value.usedTurnIds.has(requiredTurnKey(payload)))) {
       return { status: "rejected", code: "invalid_state", message: "A new unique turn requires a ready session." };
     }
     if (payload.type === "turn.completed") {
-      if (session.value.nativeTurnId !== payload.nativeTurnId || session.value.turnEnding) {
+      if (session.value.nativeTurnId !== payload.nativeTurnId || session.value.turnId !== payload.turnId || session.value.turnEnding) {
         return { status: "rejected", code: "invalid_state", message: "The completed turn is not active." };
       }
       return { status: "ok", value: this.completeTurn(session.value, payload, correlationId) };
@@ -423,11 +431,12 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
         nativeDetails: { resolution: "turn_ended" },
       }, approval.correlationId);
     }
-    return this.publish(session, payload, correlationId ?? payload.nativeTurnId, () => {
+    return this.publish(session, payload, correlationId ?? requiredTurnKey(payload), () => {
       session.nativeTurnId = undefined;
+      session.turnId = undefined;
       session.turnEnding = false;
       if (session.state === "active" && this.sessions.get(session.identity.sessionId) === session) {
-        this.publish(session, { type: "session.state", state: "ready" }, payload.nativeTurnId);
+        this.publish(session, { type: "session.state", state: "ready" }, requiredTurnKey(payload));
       }
     });
   }
@@ -441,6 +450,7 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
     session.sequence += 1;
     const event: NativeHarnessEvent = {
       nativeTurnId: session.nativeTurnId,
+      turnId: session.turnId,
       ...payload,
       ...session.identity,
       correlationId,
@@ -452,13 +462,15 @@ export class FakeNativeHarnessAdapter implements NativeHarnessAdapter {
     if (session.state !== "active" || this.sessions.get(session.identity.sessionId) !== session) return event;
     if (payload.type === "turn.started") {
       session.nativeTurnId = payload.nativeTurnId;
-      session.usedTurnIds.add(payload.nativeTurnId);
+      session.turnId = payload.turnId;
+      session.usedTurnIds.add(requiredTurnKey(payload));
     } else if (payload.type === "approval.requested") {
       session.usedApprovalIds.add(payload.approvalId);
       session.pendingApprovals.set(payload.approvalId, {
         correlationId,
         choices: new Set(payload.choices),
         nativeTurnId: session.nativeTurnId,
+        turnId: session.turnId,
       });
     } else if (payload.type === "approval.resolved") {
       session.pendingApprovals.delete(payload.approvalId);

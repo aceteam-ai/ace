@@ -22,6 +22,7 @@ export interface NativeSessionState {
   nativeState?: string;
   permissionContext?: NativeDetails;
   nativeTurnId?: string;
+  turnId?: string;
   outcome?: NativeHarnessTurnOutcome;
   messages: NativeMessage[];
   tools: NativeActivity[];
@@ -30,6 +31,7 @@ export interface NativeSessionState {
   approvals: NativeApproval[];
   notice?: string;
   registrationNotice?: string;
+  registrationStatus?: "pending" | "ready" | "unavailable";
   connectionKind?: "new" | "resumed";
   interruptPending: boolean;
   lastSequence: number;
@@ -65,9 +67,14 @@ function permissionContext(event: NativeHarnessEvent): NativeDetails | undefined
   const context = record(event.nativeDetails).permissionContext;
   return context && typeof context === "object" && !Array.isArray(context) ? structuredClone(context) as NativeDetails : undefined;
 }
+export function nativeProviderLabel(adapterId?: string): string {
+  return adapterId === "codex" ? "Codex" : adapterId === "claude" ? "Claude Agent" : nativeInlineText(adapterId ?? "Native harness");
+}
+export const nativeTurnKey = (value: { nativeTurnId?: string; turnId?: string }): string | undefined => value.nativeTurnId ?? value.turnId;
 export function nativePermissionSummary(state: NativeSessionState): string {
   const context = state.permissionContext;
-  if (!context) return "Permissions: not yet reported by Codex";
+  if (!context) return `Permissions: awaiting ${nativeProviderLabel(state.identity?.adapterId)} confirmation`;
+  if (state.identity?.adapterId === "claude") return `Claude mode: ${nativeInlineText(context.permissionMode ?? "unknown")} | Native rules may act before an Ace approval prompt`;
   const sandbox = record(context.sandbox);
   return `Approval: ${nativeInlineText(context.approvalPolicy ?? "unknown")} | Reviewer: ${nativeInlineText(context.approvalsReviewer ?? "unknown")} | Sandbox: ${nativeInlineText(sandbox.type ?? "unknown")}`;
 }
@@ -75,19 +82,23 @@ export function nativePermissionSummary(state: NativeSessionState): string {
 /** In-memory presentation only. Native adapter retains request authority and complete protocol detail. */
 export function reduceNativeEvent(state: NativeSessionState, event: NativeHarnessEvent): NativeSessionState {
   if (!state.identity || event.adapterId !== state.identity.adapterId || event.sessionId !== state.identity.sessionId ||
-      event.nativeSessionId !== state.identity.nativeSessionId || event.sequence <= state.lastSequence ||
+      (state.identity.nativeSessionId !== undefined && event.nativeSessionId !== state.identity.nativeSessionId) ||
+      (event.nativeSessionId !== undefined && !event.nativeSessionId.trim()) || event.sequence <= state.lastSequence ||
       ["closed", "closing", "error"].includes(state.phase)) return state;
-  let next: NativeSessionState = { ...state, lastSequence: event.sequence };
+  let next: NativeSessionState = { ...state, lastSequence: event.sequence,
+    identity: state.identity.nativeSessionId === undefined && event.nativeSessionId !== undefined
+      ? { ...state.identity, nativeSessionId: event.nativeSessionId } : state.identity };
+  const turn = nativeTurnKey(event);
   const context = permissionContext(event);
   if (context) next.permissionContext = context;
-  const key = `${event.nativeTurnId ?? "session"}:${"nativeMessageId" in event ? event.nativeMessageId ?? `event-${event.sequence}` : event.sequence}`;
+  const key = `${turn ?? "session"}:${"nativeMessageId" in event ? event.nativeMessageId ?? `event-${event.sequence}` : event.sequence}`;
   switch (event.type) {
     case "session.state":
-      return { ...next, phase: event.state, nativeState: nativeText(event.nativeState), nativeTurnId: event.nativeTurnId, interruptPending: event.state === "ready" ? false : next.interruptPending };
+      return { ...next, phase: event.state, nativeState: nativeText(event.nativeState), nativeTurnId: event.nativeTurnId, turnId: event.turnId, interruptPending: event.state === "ready" ? false : next.interruptPending };
     case "turn.started":
-      return { ...next, phase: "running", nativeTurnId: event.nativeTurnId, outcome: undefined, notice: undefined };
+      return { ...next, phase: "running", nativeTurnId: event.nativeTurnId, turnId: event.turnId, outcome: undefined, notice: undefined };
     case "turn.completed":
-      return { ...next, outcome: event.outcome, approvals: next.approvals.filter((entry) => entry.turnId !== event.nativeTurnId), interruptPending: false,
+      return { ...next, outcome: event.outcome, approvals: next.approvals.filter((entry) => entry.turnId !== turn), interruptPending: false,
         notice: event.error ? nativeText(event.error.message) : `Turn ${event.outcome}.` };
     case "conversation.delta":
     case "conversation.message": {
@@ -99,7 +110,7 @@ export function reduceNativeEvent(state: NativeSessionState, event: NativeHarnes
     }
     case "tool.activity": {
       const params = nativeParams(event); const item = record(params.item);
-      next.tools = upsert(next.tools, { key: `${event.nativeTurnId}:${event.toolCallId}`, id: event.toolCallId, turnId: event.nativeTurnId,
+      next.tools = upsert(next.tools, { key: `${turn}:${event.toolCallId}`, id: event.toolCallId, turnId: turn,
         name: nativeText(event.name), state: nativeText(event.nativeState ?? event.state),
         details: nativeText({ input: event.input, output: event.output, changes: item.changes, cwd: item.cwd }) });
       return next;
@@ -109,20 +120,22 @@ export function reduceNativeEvent(state: NativeSessionState, event: NativeHarnes
       return next;
     case "change.reported": {
       const params = nativeParams(event); const changes = record(params.item).changes;
-      const patch = typeof params.diff === "string" ? params.diff : Array.isArray(changes)
-        ? changes.map((change) => record(change).diff).filter((diff): diff is string => typeof diff === "string").join("\n") : undefined;
-      next.changes = upsert(next.changes, { key: `${event.nativeTurnId}:${event.changeId}`, files: event.files.map((file) => `${nativeText(file.kind)} ${nativeText(file.path)}`), patch: patch ? nativeText(patch) : undefined });
+      const details = record(event.nativeDetails);
+      const patch = typeof details.gitDiff === "string" ? details.gitDiff : Array.isArray(details.structuredPatch)
+        ? nativeText(details.structuredPatch) : typeof params.diff === "string" ? params.diff : Array.isArray(changes)
+          ? changes.map((change) => record(change).diff).filter((diff): diff is string => typeof diff === "string").join("\n") : undefined;
+      next.changes = upsert(next.changes, { key: `${turn}:${event.changeId}`, files: event.files.map((file) => `${nativeText(file.kind)} ${nativeText(file.path)}`), patch: patch ? nativeText(patch) : undefined });
       return next;
     }
     case "approval.requested": {
       const params = nativeParams(event);
       const nativeItemId = typeof params.itemId === "string" ? params.itemId : undefined;
-      const item = next.tools.find((tool) => tool.id === nativeItemId && tool.turnId === event.nativeTurnId);
-      const details = nativeText({ command: params.command,
+      const item = next.tools.find((tool) => tool.id === nativeItemId && tool.turnId === turn);
+      const details = nativeText(event.adapterId === "claude" ? event.nativeDetails : { command: params.command,
         cwd: params.cwd, grantRoot: params.grantRoot, network: params.networkApprovalContext,
         requestedPermissions: params.additionalPermissions, nativeAction: item?.details, requestId: event.nativeApprovalId, nativeTurnId: event.nativeTurnId });
       next.approvals = [...next.approvals.filter((entry) => entry.id !== event.approvalId), {
-        id: event.approvalId, correlationId: event.correlationId, nativeApprovalId: event.nativeApprovalId, turnId: event.nativeTurnId,
+        id: event.approvalId, correlationId: event.correlationId, nativeApprovalId: event.nativeApprovalId, turnId: turn,
         prompt: nativeText(event.prompt), choices: [...event.choices], details, status: "waiting",
       }];
       return { ...next, phase: "waiting_for_approval" };

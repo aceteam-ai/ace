@@ -3,9 +3,11 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { FakeNativeHarnessAdapter } from "../../src/harness/fake.js";
+import { ClaudeNativeHarnessAdapter } from "../../src/harness/claude.js";
 import { NativeSessionStore } from "../../src/harness/session-store.js";
 import { NativeSessionManager, type SessionManagerNotice } from "../../src/harness/session-manager.js";
 import type { NativeHarnessSessionIdentity } from "../../src/harness/types.js";
+import { SyntheticClaudeSdk } from "./fixtures/claude-sdk.js";
 
 let root: string;
 let workspace: string;
@@ -178,6 +180,38 @@ describe("managed native session lifecycle", () => {
     expect((await manager.listCandidates(workspace))[0]).toMatchObject({ eligible: true, ownership: "available" });
     expect(await manager.forget(session)).toBe(true);
     expect(await store.list()).toEqual([]);
+  });
+
+  it("retains resume ownership when Claude cannot confirm cleanup after a failed open", async () => {
+    const saved = { adapterId: "claude", sessionId: "saved-claude", nativeSessionId: "native-claude" };
+    await store.rememberCreatedSession(saved, workspace);
+    const sdk = new SyntheticClaudeSdk();
+    sdk.sessionInfo = { sessionId: saved.nativeSessionId, cwd: workspace };
+    let failInitialization!: (error: Error) => void;
+    sdk.initialization = new Promise((_resolve, reject) => { failInitialization = reject; });
+    sdk.configureQuery = (query) => {
+      query.closeError = new Error("synthetic close failure");
+      query.returnError = new Error("synthetic return failure");
+    };
+    const claudeManager = new NativeSessionManager({ store, adapters: { claude: (sessionStore, hooks) =>
+      new ClaudeNativeHarnessAdapter({ sessionStore, onNativeSessionConfirmed: hooks.onNativeSessionConfirmed,
+        sdkFactory: async () => sdk, environment: { ANTHROPIC_API_KEY: "synthetic" }, cleanupTimeoutMs: 20 }) } });
+    const managed = claudeManager.createAdapter("claude");
+    const opening = managed.resume({ type: "session.resume", registeredSessionId: saved.sessionId,
+      sessionId: "resumed-claude", nativeSessionId: saved.nativeSessionId, workspace });
+    await vi.waitFor(() => expect(sdk.queries).toHaveLength(1));
+    failInitialization(new Error("synthetic initialization failure"));
+    expect(await opening).toMatchObject({ status: "error", code: "native_cleanup_failed" });
+    expect(await store.inspectOwnership(saved)).toBe("active");
+    expect((await claudeManager.listCandidates(workspace))[0]).toMatchObject({ eligible: false, ownership: "active" });
+    expect(await managed.resume({ type: "session.resume", registeredSessionId: saved.sessionId,
+      sessionId: "another-connection", nativeSessionId: saved.nativeSessionId, workspace })).toMatchObject({ status: "rejected" });
+    expect(sdk.queries[0].closed).toBe(false);
+
+    sdk.queries[0].closeError = undefined;
+    sdk.queries[0].returnError = undefined;
+    expect(await managed.dispose({ type: "session.dispose", session: { adapterId: "claude", sessionId: "resumed-claude" } })).toMatchObject({ status: "ok" });
+    expect(await store.inspectOwnership(saved)).toBe("available");
   });
 });
 

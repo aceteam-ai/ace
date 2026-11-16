@@ -143,21 +143,24 @@ export interface NativeHarnessTurnError {
 
 export type NativeHarnessTurnOutcome = "completed" | "interrupted" | "failed";
 
+/** A local correlation ID is distinct from an ID minted by the native harness. */
+export type NativeHarnessTurnIdentity =
+  | { nativeTurnId: string; turnId?: string }
+  | { turnId: string; nativeTurnId?: undefined };
+
 export type NativeHarnessEventPayload =
-  | {
+  | (NativeHarnessTurnIdentity & {
       type: "turn.started";
-      nativeTurnId: string;
       nativeDetails?: NativeDetails;
-    }
-  | {
+    })
+  | (NativeHarnessTurnIdentity & {
       type: "turn.completed";
-      nativeTurnId: string;
       outcome: NativeHarnessTurnOutcome;
       result?: unknown;
       error?: NativeHarnessTurnError;
       nativeState?: string;
       nativeDetails?: NativeDetails;
-    }
+    })
   | {
       type: "session.state";
       state: NativeHarnessSessionState;
@@ -253,6 +256,8 @@ export type NativeHarnessEvent = NativeHarnessEventPayload & {
   nativeSessionId?: string;
   /** Present when this event describes a known native turn; approvals keep request correlation. */
   nativeTurnId?: string;
+  /** Ace-owned turn identity for harnesses without a native-minted turn ID. */
+  turnId?: string;
   correlationId?: string;
   sequence: number;
   timestamp: string;

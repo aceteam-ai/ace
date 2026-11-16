@@ -3,9 +3,14 @@ import { Text } from "ink";
 import { render, cleanup } from "ink-testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../../src/ui/App.js";
+import { ClaudeNativeHarnessAdapter } from "../../src/harness/claude.js";
+import { CodexNativeHarnessAdapter } from "../../src/harness/codex.js";
 import { createNativeSessionsPanel } from "../../src/ui/NativeSessionsPanel.js";
 import type { WorkspaceTaskService } from "../../src/ui/task-service.js";
 import { SyntheticNativeAdapter } from "./fixtures/native-ui-scenario.js";
+
+const sdkLoaded = vi.hoisted(() => vi.fn());
+vi.mock("@anthropic-ai/claude-agent-sdk", () => { sdkLoaded(); return {}; });
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 30));
 const service: WorkspaceTaskService = {
@@ -13,15 +18,36 @@ const service: WorkspaceTaskService = {
   getDemo: () => undefined, getConfig: () => ({}), getWorkflowInputs: () => [],
   executePattern: async () => "unused", executeWorkflow: async () => "unused", createWorkflow: () => "unused", updateDefaultModel: () => {},
 };
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("native panel in the shared workspace", () => {
+  it("advertises both production providers without loading the SDK or opening a session", async () => {
+    const failure = { status: "error" as const, code: "unexpected_test_start", message: "A chooser must not start a native process." };
+    const claudeStart = vi.spyOn(ClaudeNativeHarnessAdapter.prototype, "start").mockResolvedValue(failure);
+    const codexStart = vi.spyOn(CodexNativeHarnessAdapter.prototype, "start").mockResolvedValue(failure);
+    const panel = createNativeSessionsPanel({ workspace: "/synthetic/workspace" });
+    const view = render(<App service={service} panels={[panel]} />);
+    const press = async (value: string) => { view.stdin.write(value); await tick(); };
+    try {
+      await tick(); await press("\u001b"); for (let i = 0; i < 5; i++) await press("j"); await press("\r");
+      expect(view.lastFrame()).toContain("❯ Codex");
+      expect(view.lastFrame()).toContain("Claude Agent");
+      await press("\u001b[B");
+      expect(view.lastFrame()).toContain("Uses ANTHROPIC_API_KEY");
+      await press("\r");
+      expect(view.lastFrame()).toContain("Claude Agent workspace directory");
+      expect(sdkLoaded).not.toHaveBeenCalled();
+      expect(claudeStart).not.toHaveBeenCalled();
+      expect(codexStart).not.toHaveBeenCalled();
+    } finally { await panel.dispose?.(); }
+  });
+
   it("uses native provider context and leaves native input and help keys with the panel", async () => {
     const adapter = new SyntheticNativeAdapter(); const panel = createNativeSessionsPanel({ adapter, workspace: "/synthetic/workspace" });
     const send = vi.spyOn(adapter, "sendInput"); const view = render(<App service={service} panels={[panel]} />);
     const press = async (value: string) => { view.stdin.write(value); await tick(); };
     await tick(); await press("\u001b"); for (let i = 0; i < 5; i++) await press("j"); await press("\r");
-    expect(view.lastFrame()).toContain("Codex manages its own sign-in and permissions");
+    expect(view.lastFrame()).toContain("synthetic-codex manages its own sign-in and permissions");
     expect(view.lastFrame()).not.toContain("No provider configured");
     await press("\r"); await press("\r"); await press("\r"); await press("why?q");
     expect(view.lastFrame()).toContain("why?q");

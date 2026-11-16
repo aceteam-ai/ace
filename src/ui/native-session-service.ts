@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { NativeSessionRecord } from "../harness/session-store.js";
+import { captureWorkspaceIdentity, sameWorkspace, type NativeSessionRecord, type WorkspaceIdentity } from "../harness/session-store.js";
 import type { SessionManagerNotice } from "../harness/session-manager.js";
 import type { CommandAccepted, NativeHarnessAdapter, NativeHarnessCommandResult, NativeHarnessObservation, NativeHarnessSessionIdentity } from "../harness/types.js";
-import { initialNativeSessionState, nativeText, reduceNativeEvent, type NativeSessionState } from "./native-session-state.js";
+import { initialNativeSessionState, nativeText, nativeTurnKey, reduceNativeEvent, type NativeSessionState } from "./native-session-state.js";
 
 type StartResult = NativeHarnessCommandResult<NativeHarnessSessionIdentity>;
 function closedResult(): NativeHarnessCommandResult<never> {
@@ -26,6 +26,8 @@ export class NativeSessionService {
   private disposed = false;
   private epoch = 0;
   private inputAttempt = 0;
+  private initialInputPending = false;
+  private initialInputOwner?: object;
   private readonly localOperations = new Set<Promise<unknown>>();
 
   constructor(readonly adapter: NativeHarnessAdapter) {}
@@ -65,12 +67,52 @@ export class NativeSessionService {
   };
 
   reportRegistrationNotice = (notice: SessionManagerNotice): void => {
-    if (!this.disposed) this.update({ ...this.state, registrationNotice: nativeText(`${notice.message}${notice.recoveryPath ? ` Recovery path: ${notice.recoveryPath}` : ""}`) });
+    if (this.disposed) return;
+    if (notice.code === "native_registration_ready") {
+      this.update({ ...this.state, registrationStatus: "ready", registrationNotice: undefined });
+    } else this.update({ ...this.state, registrationStatus: notice.code === "native_identity_pending" ? "pending" : "unavailable",
+      registrationNotice: nativeText(`${notice.message}${notice.recoveryPath ? ` Recovery path: ${notice.recoveryPath}` : ""}`) });
   };
 
-  start(workspace: string): Promise<StartResult> { return this.open(workspace); }
+  canStartFresh = (): boolean => !this.disposed && !this.identity && !this.opening && !this.closing && !this.initialInputPending && ["idle", "closed", "error"].includes(this.state.phase);
+
+  start(workspace: string): Promise<StartResult> { return this.initialInputPending ? Promise.resolve(closedResult()) : this.open(workspace); }
+
+  /** One explicit reviewed input reserves a new session; readiness listeners cannot inject another input. */
+  async startWithInput(workspace: string, input: string, expectedWorkspace: WorkspaceIdentity, owner: object): Promise<NativeHarnessCommandResult<CommandAccepted>> {
+    if (!this.canStartFresh()) return closedResult();
+    this.initialInputPending = true;
+    this.initialInputOwner = owner;
+    const priorEpoch = this.epoch;
+    const verify = async () => {
+      if (!sameWorkspace(await captureWorkspaceIdentity(workspace), expectedWorkspace)) throw new Error("The reviewed handoff workspace changed. Load and review the handoff again.");
+    };
+    try {
+      await verify();
+      if (this.epoch !== priorEpoch || this.disposed || this.closing) return closedResult();
+      const started = await this.open(workspace);
+      if (started.status !== "ok") return started;
+      const epoch = this.epoch;
+      await verify();
+      if (!this.current(epoch)) return closedResult();
+      return await this.sendInputCommand(input, true);
+    } catch (error) {
+      await this.close();
+      const result = failure(error);
+      this.update({ ...this.state, phase: "error", notice: nativeText(message(result)) });
+      return result;
+    } finally { this.initialInputPending = false; }
+  }
+
+  /** An old review cannot close a later connection that reused this view service. */
+  async cancelInitialInput(owner: object): Promise<boolean> {
+    if (this.initialInputOwner !== owner) return true;
+    await this.close();
+    return this.initialInputOwner !== owner;
+  }
 
   resume(record: NativeSessionRecord, workspace: string): Promise<StartResult> {
+    if (this.initialInputPending) return Promise.resolve(closedResult());
     if (record.adapterId !== this.adapter.adapterId) return Promise.resolve({ status: "rejected", code: "adapter_mismatch", message: "Choose the native provider that created this registration." });
     const capability = this.adapter.capabilities.resume;
     if (!capability.supported) return Promise.resolve({ status: "unsupported", operation: "resume", reason: capability.reason });
@@ -100,7 +142,17 @@ export class NativeSessionService {
       // Publish readiness only after the observer is registered; a ready listener may send input immediately.
       this.state = { ...this.state, identity: result.value, connectionKind: saved ? "resumed" : "new" };
       const observed = this.adapter.observe({ type: "session.observe", session: result.value }, (event) => {
-        if (this.current(epoch)) this.update(reduceNativeEvent(this.state, event));
+        if (!this.current(epoch)) return;
+        const current = this.identity;
+        if (current && event.adapterId === current.adapterId && event.sessionId === current.sessionId &&
+            current.nativeSessionId !== undefined && event.nativeSessionId !== current.nativeSessionId) {
+          void this.commandError({ status: "error", code: "identity_mismatch", message: "The native session changed its confirmed identity. This connection was closed." }, epoch);
+          return;
+        }
+        const next = reduceNativeEvent(this.state, event);
+        // Commands triggered synchronously by a render listener must use the newly confirmed identity.
+        this.identity = next.identity;
+        this.update(next);
       });
       if (!this.current(epoch)) {
         if (observed.status === "ok") observed.value.dispose();
@@ -123,7 +175,10 @@ export class NativeSessionService {
     }
   }
 
-  async sendInput(input: string): Promise<NativeHarnessCommandResult<CommandAccepted>> {
+  sendInput(input: string): Promise<NativeHarnessCommandResult<CommandAccepted>> { return this.sendInputCommand(input, false); }
+
+  private async sendInputCommand(input: string, initial: boolean): Promise<NativeHarnessCommandResult<CommandAccepted>> {
+    if (this.initialInputPending && !initial) return closedResult();
     const identity = this.identity;
     if (!identity || this.state.phase !== "ready" || this.closing || this.disposed) return closedResult();
     const epoch = this.epoch; const attempt = ++this.inputAttempt; const sequence = this.state.lastSequence;
@@ -143,11 +198,11 @@ export class NativeSessionService {
   async interrupt(): Promise<NativeHarnessCommandResult<CommandAccepted>> {
     const identity = this.identity;
     if (!identity || !["running", "waiting_for_approval"].includes(this.state.phase) || this.state.interruptPending || this.disposed || this.closing) return closedResult();
-    const epoch = this.epoch; const turnId = this.state.nativeTurnId;
+    const epoch = this.epoch; const turnId = nativeTurnKey(this.state);
     this.update({ ...this.state, interruptPending: true });
     if (!this.current(epoch)) return closedResult();
     const result = await this.invoke(() => this.adapter.interrupt({ type: "session.interrupt", session: identity }));
-    if (this.current(epoch) && turnId === this.state.nativeTurnId) {
+    if (this.current(epoch) && turnId === nativeTurnKey(this.state)) {
       await this.commandError(result, epoch);
       if (this.current(epoch)) {
         if (result.status !== "ok") this.update({ ...this.state, interruptPending: false });
@@ -200,6 +255,7 @@ export class NativeSessionService {
         if (started?.status === "ok") await release(started.value);
       }
       this.identity = errors.length ? identity : undefined;
+      if (!errors.length) this.initialInputOwner = undefined;
       this.closing = undefined;
       this.update({ ...this.state, phase: errors.length ? "error" : "closed", identity: undefined, approvals: [], interruptPending: false,
         notice: errors.length ? nativeText(`Native cleanup failed: ${errors.join("; ")}`) : this.state.notice });
