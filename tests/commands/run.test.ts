@@ -4,12 +4,14 @@ import { Command } from "commander";
 const commandMocks = vi.hoisted(() => ({
   runRemotePlatformTemplate: vi.fn(),
   formatRemotePlatformResult: vi.fn(() => "remote result"),
+  formatPlatformError: vi.fn((error: Error) => error.message),
 }));
 
 // Mock dependencies
 vi.mock("../../src/commands/templates.js", () => ({
   runRemotePlatformTemplate: commandMocks.runRemotePlatformTemplate,
   formatRemotePlatformResult: commandMocks.formatRemotePlatformResult,
+  formatPlatformError: commandMocks.formatPlatformError,
 }));
 
 vi.mock("../../src/utils/ensure-python.js", () => ({
@@ -198,6 +200,22 @@ describe("named graph input validation", () => {
       runCommand.setOptionValue("json", undefined);
       runCommand.setOptionValue("input", []);
       write.mockRestore();
+    }
+  });
+
+  it("returns exit 2 when an OAuth-only session cannot use the REST template route", async () => {
+    const { CliError } = await import("../../src/utils/control-plane.js");
+    commandMocks.runRemotePlatformTemplate.mockRejectedValueOnce(new CliError(2, "Run ace login --api-key-env KEY"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const previousExitCode = process.exitCode;
+    try {
+      await runCommand.parseAsync(["node", "ace", "11111111-2222-4333-8444-555555555555", "--remote"]);
+      expect(process.exitCode).toBe(2);
+    } finally {
+      process.exitCode = previousExitCode;
+      runCommand.setOptionValue("remote", undefined);
+      runCommand.setOptionValue("input", []);
+      error.mockRestore();
     }
   });
 

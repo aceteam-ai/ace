@@ -50,31 +50,19 @@ or deployed catalog contents are assumed.
 
 ## Authentication and transport
 
-Use an explicit platform origin and a platform API key supplied by the user.
-Bearer transport is supported. A separate OAuth implementation is unnecessary
-for this slice. Do not reuse or reinterpret Fabric credentials, endpoint
-configuration, or its retry wrapper.
-
-Configuration is `~/.ace/platform/credentials.json`, an atomic complete
-pair of HTTPS origin and key. Use a private directory (0700), exclusive temporary
-file (0600), and atomic replacement. Reads must be bounded, regular-file only,
-owned/private, and reject symlinks/nonregular files before opening, with
-nonblocking/race-safe file checks. Keep the key out of arguments, logs, errors,
-JSON command output, fixtures, and catalog caches. Store no account metadata.
-The credential belongs to exactly its stored origin; an override of the origin
-requires its own explicit credential. Environment override is an explicit
-`ACETEAM_PLATFORM_URL` and `ACETEAM_PLATFORM_API_KEY` pair.
-
-`ace templates login --url <https-origin>` prompts privately for an API key and
-verifies it with the read-only catalog request before saving. A failed check does
-not save the candidate. `ace templates logout` removes only this credential
-pair. There is no credential prompt, settings read, or network request at initial
-TUI startup. Do not mutate other credential files or native provider settings.
+The shared control-plane session from `ace login` is authoritative. `ace org use`
+selects the organization. Template operations verify that organization before
+using REST. The platform currently has no MCP template catalog/detail/run tools;
+until those exist, REST uses only a control-plane API-key session. An OAuth-only
+session fails with exit 2 and an actionable API-key login instruction. There is
+no separate template login, logout, environment pair, or credential file.
+Keep the shared key out of logs, errors, JSON command output, fixtures, and
+catalog caches. Do not reinterpret Fabric credentials or its retry wrapper.
 
 All credentialed requests reject redirects; especially do not allow a 307/308 to
-resubmit a credit-consuming POST. No run POST is automatically retried. Reject
-userinfo, query, fragment, or non-origin configuration URLs. Plain HTTP may be
-allowed only for an explicit loopback test/development origin.
+resubmit a credit-consuming POST. No run POST is automatically retried. The
+REST origin derives from the configured MCP URL. Plain HTTP is allowed only for
+an explicit loopback test/development origin.
 
 ## Client and execution boundary
 

@@ -1,11 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  password: vi.fn(async () => "synthetic-key"),
-  listTemplates: vi.fn(async () => []),
   createClient: vi.fn(async () => ({})),
-  saveCredentials: vi.fn(async () => undefined),
-  removeCredentials: vi.fn(async () => false),
   getTemplate: vi.fn(),
   collectInput: vi.fn(async () => ({})),
   runLocal: vi.fn(),
@@ -13,7 +9,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@inquirer/prompts", () => ({
-  password: mocks.password,
   input: vi.fn(),
 }));
 
@@ -31,17 +26,7 @@ vi.mock("../../src/platform/client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/platform/client.js")>();
   return {
     ...actual,
-    PlatformClient: vi.fn(function () { return { listTemplates: mocks.listTemplates }; }),
     createPlatformClientFromConfig: mocks.createClient,
-  };
-});
-
-vi.mock("../../src/platform/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/platform/config.js")>();
-  return {
-    ...actual,
-    savePlatformCredentials: mocks.saveCredentials,
-    removePlatformCredentials: mocks.removeCredentials,
   };
 });
 
@@ -58,38 +43,27 @@ import { templatesCommand } from "../../src/commands/templates.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.password.mockResolvedValue("synthetic-key");
-  mocks.listTemplates.mockResolvedValue([]);
-  mocks.saveCredentials.mockResolvedValue(undefined);
   mocks.createClient.mockResolvedValue({});
 });
 
 describe("templates command", () => {
-  it("does not save a candidate key when read-only catalog verification fails", async () => {
-    mocks.listTemplates.mockRejectedValueOnce(new Error("denied"));
+  it("propagates OAuth-only REST denial as exit 2", async () => {
+    const { CliError } = await import("../../src/utils/control-plane.js");
+    mocks.createClient.mockRejectedValueOnce(new CliError(2, "Run ace login --api-key-env KEY"));
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const previousExitCode = process.exitCode;
     try {
-      await templatesCommand.parseAsync(["node", "ace", "login", "--url", "https://platform.example"]);
-      expect(process.exitCode).toBe(1);
-      expect(mocks.saveCredentials).not.toHaveBeenCalled();
-      expect(mocks.spinner.fail).toHaveBeenCalledWith("Platform verification failed");
+      await templatesCommand.parseAsync(["node", "ace", "list"]);
+      expect(process.exitCode).toBe(2);
+      expect(mocks.createClient).toHaveBeenCalledTimes(1);
     } finally {
       process.exitCode = previousExitCode;
       error.mockRestore();
     }
   });
 
-  it("saves only the verified normalized origin and private prompt value", async () => {
-    const previousExitCode = process.exitCode;
-    try {
-      await templatesCommand.parseAsync(["node", "ace", "login", "--url", "https://PLATFORM.example/"]);
-      expect(mocks.listTemplates).toHaveBeenCalledTimes(1);
-      expect(mocks.saveCredentials).toHaveBeenCalledWith({ origin: "https://platform.example", apiKey: "synthetic-key" });
-      expect(process.exitCode).toBe(previousExitCode);
-    } finally {
-      process.exitCode = previousExitCode;
-    }
+  it("does not offer a second template login or logout", () => {
+    expect(templatesCommand.commands.map((command) => command.name())).toEqual(["list", "run"]);
   });
 
   it("fails and stops the local spinner when runtime execution rejects", async () => {

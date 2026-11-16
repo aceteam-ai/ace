@@ -196,13 +196,13 @@ $ ace workflow list-templates --category basics
 Browse authorized platform templates and run a selected graph locally or remotely.
 
 ```bash
-ace templates login --url https://app.example.com
+ace login --api-key-env ACETEAM_API_KEY --mcp-url https://app.example.com/mcp
 ace templates list --category general
 ace templates run TEMPLATE_UUID --input prompt="Hello"
 ace run --remote TEMPLATE_UUID --input prompt="Hello"
 ```
 
-Platform credentials are separate from Fabric and model-provider credentials. Remote runs can consume credits and are never retried after an uncertain submission. See [Platform template client](docs/platform-template-client.md) for authentication, typed inputs, version behavior, and failure handling.
+Platform templates use the selected control-plane account and organization. The platform currently exposes the template catalog over REST, so OAuth-only sessions receive an actionable exit 2 until equivalent MCP tools exist. Remote runs can consume credits and are never retried after an uncertain submission. See [Platform template client](docs/platform-template-client.md) for authentication, typed inputs, version behavior, and failure handling.
 
 ### `ace workflow create [template-id] [-o file]`
 

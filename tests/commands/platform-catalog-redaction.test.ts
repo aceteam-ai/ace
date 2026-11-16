@@ -1,6 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { templatesCommand } from "../../src/commands/templates.js";
 
+vi.mock("../../src/utils/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/utils/config.js")>();
+  return { ...actual, loadConfig: () => ({ control_plane: {
+    kind: "api_key", mcp_url: "https://platform.example/mcp", access_token: KEY, active_org_id: "org-a",
+  } }) };
+});
+
+vi.mock("../../src/utils/control-plane.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/utils/control-plane.js")>();
+  return { ...actual, ControlPlaneClient: class { async ensureSelectedOrg() { return { organization_id: "org-a" }; } } };
+});
+
 const KEY = "act_synthetic_catalog_fixture_only";
 const WORKFLOW_ID = "11111111-2222-4333-8444-555555555555";
 
@@ -12,8 +24,6 @@ afterEach(() => {
 
 describe("platform catalog credential redaction", () => {
   it.each([false, true])("redacts echoed keys in the actual list command (json=%s)", async (json) => {
-    vi.stubEnv("ACETEAM_PLATFORM_URL", "https://platform.example");
-    vi.stubEnv("ACETEAM_PLATFORM_API_KEY", KEY);
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       templates: [{
         workflow_id: WORKFLOW_ID,

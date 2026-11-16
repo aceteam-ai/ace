@@ -25,6 +25,7 @@ import { validateNodeTypes } from "../utils/node-cache.js";
 import { formatPlatformError, formatRemotePlatformResult, runRemotePlatformTemplate } from "./templates.js";
 import { isPlatformTemplateId } from "../platform/service.js";
 import { withCommandSignal } from "../utils/command-signal.js";
+import { CliError } from "../utils/control-plane.js";
 import * as output from "../utils/output.js";
 
 function parseInputArgs(inputs: string[]): Record<string, string> {
@@ -235,7 +236,7 @@ export const runCommand = new Command("run")
           } catch (err) {
             spinner.fail("Platform template run failed");
             output.error(formatPlatformError(err));
-            process.exitCode = 1;
+            process.exitCode = err instanceof CliError ? err.exitCode : 1;
           }
         });
         return;

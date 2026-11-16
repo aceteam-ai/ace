@@ -12,7 +12,7 @@ import { addCompletionCommands } from "./commands/completion.js";
 import { agentCommand } from "./commands/agent.js";
 import { beginLegacyOutput, finishLegacyOutput } from "./utils/legacy-output.js";
 import { CliError } from "./utils/control-plane.js";
- 
+
 function addOutputOptions(command: Command): void {
   const options = command.options.map((option) => option.long);
   if (!options.includes("--json")) command.option("--json", "Output JSON");

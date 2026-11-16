@@ -1,14 +1,14 @@
 import { Command } from "commander";
-import { input as promptInput, password } from "@inquirer/prompts";
+import { input as promptInput } from "@inquirer/prompts";
 import ora from "ora";
 import { PlatformClient, PlatformClientError, createPlatformClientFromConfig } from "../platform/client.js";
-import { removePlatformCredentials, normalizePlatformOrigin, savePlatformCredentials } from "../platform/config.js";
 import { getPlatformTemplateById } from "../platform/service.js";
 import { collectPlatformTemplateInput, runPlatformTemplateLocally } from "../platform/workflow.js";
 import type { PlatformRunResult, PlatformTemplate } from "../platform/types.js";
 import type { WorkflowInputField } from "../ui/workflow-form.js";
 import { sanitizeTerminalText } from "../ui/terminal.js";
 import { withCommandSignal } from "../utils/command-signal.js";
+import { CliError } from "../utils/control-plane.js";
 import * as output from "../utils/output.js";
 
 function repeat(value: string, previous: string[]): string[] {
@@ -28,7 +28,7 @@ export function formatPlatformError(error: unknown): string {
 
 function fail(error: unknown): void {
   output.error(formatPlatformError(error));
-  process.exitCode = 1;
+  process.exitCode = error instanceof CliError ? error.exitCode : 1;
 }
 
 function interactivePrompt(signal?: AbortSignal): ((field: WorkflowInputField) => Promise<string>) | undefined {
@@ -77,45 +77,6 @@ export async function runRemotePlatformTemplate(
 
 export const templatesCommand = new Command("templates")
   .description("Browse and run authorized platform templates");
-
-templatesCommand
-  .command("login")
-  .description("Save a verified platform API key")
-  .requiredOption("--url <https-origin>", "AceTeam platform origin")
-  .action(async (options: { url: string }) => {
-    try {
-      const origin = normalizePlatformOrigin(options.url);
-      const apiKey = (await password({ message: "Platform API key:", mask: "*" })).trim();
-      if (!apiKey) throw new Error("Platform API key is required.");
-      const spinner = ora("Verifying platform access...").start();
-      try {
-        const client = new PlatformClient(origin, apiKey);
-        await client.listTemplates();
-        await savePlatformCredentials({ origin, apiKey });
-        spinner.succeed("Platform credentials verified and saved");
-      } catch (error) {
-        spinner.fail("Platform verification failed");
-        throw error;
-      }
-    } catch (error) {
-      fail(error);
-    }
-  });
-
-templatesCommand
-  .command("logout")
-  .description("Remove saved platform credentials")
-  .action(async () => {
-    try {
-      const removed = await removePlatformCredentials();
-      const environmentActive = Boolean(process.env.ACETEAM_PLATFORM_URL && process.env.ACETEAM_PLATFORM_API_KEY);
-      if (removed) output.success("Stored platform credentials removed");
-      else output.info("No stored platform credentials found");
-      if (environmentActive) output.warn("Platform environment credentials remain active for this process.");
-    } catch (error) {
-      fail(error);
-    }
-  });
 
 templatesCommand
   .command("list")

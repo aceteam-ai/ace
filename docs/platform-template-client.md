@@ -4,21 +4,13 @@ Ace can browse platform workflow templates, inspect an authorized graph version,
 
 ## Credentials
 
-Platform templates use their own origin and API key. They do not reuse Fabric or model-provider credentials.
+Platform templates use the control-plane session from `ace login` and the active organization selected by `ace org use`. They do not reuse Fabric or model-provider credentials.
 
 ```console
-ace templates login --url https://app.example.com
-ace templates logout
+ace login --api-key-env ACETEAM_API_KEY --mcp-url https://app.example.com/mcp
 ```
 
-Login prompts privately for the key and verifies it with a read-only catalog request before saving anything. Stored credentials use `~/.ace/platform/credentials.json` in a private directory. The complete environment alternative is:
-
-```console
-ACETEAM_PLATFORM_URL=https://app.example.com
-ACETEAM_PLATFORM_API_KEY=...
-```
-
-Both variables are required together. The URL must be an HTTPS origin without a path, query, user information, or fragment. Explicit loopback development origins may use HTTP. Logout removes the stored pair; environment credentials remain active until the environment is changed.
+Use `ace login --browser` for OAuth and `ace login --api-key-env` for an API key. The template catalog, selected-version detail, and remote run currently have REST routes but no equivalent MCP tools. Ace uses the shared API key from the verified control-plane session for those routes. OAuth-only sessions fail with exit 2 and instructions to log in with an API key for the selected organization; they are never sent to REST. The REST origin comes from the configured MCP URL and cannot be overridden by a separate template credential. Explicit loopback development origins may use HTTP.
 
 ## Catalog and local execution
 

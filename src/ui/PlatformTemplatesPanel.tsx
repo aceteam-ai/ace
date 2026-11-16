@@ -196,6 +196,6 @@ export function PlatformTemplatesPanel({ controller, back }: { controller: Platf
 export function createPlatformTemplatesPanel(options: { service?: PlatformTemplateService } = {}): WorkspacePanel {
   const controller = new PlatformTemplateController(options.service ?? createPlatformTemplateService());
   return { id: "platform-templates", title: "Platform templates", description: "Browse platform templates and choose local or credit-consuming execution",
-    providerLabel: "Platform templates use a separate AceTeam connection",
+    providerLabel: "Platform templates use the active AceTeam organization",
     dispose: () => controller.dispose(), render: ({ back }) => <PlatformTemplatesPanel controller={controller} back={back} /> };
 }

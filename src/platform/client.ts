@@ -1,6 +1,8 @@
 import { parseWorkflowGraph } from "../utils/workflow-graph.js";
 import { validatePlatformTemplateInput } from "./input.js";
-import { normalizePlatformOrigin, resolvePlatformCredentials, type PlatformCredentialOptions } from "./config.js";
+import { normalizePlatformOrigin } from "./config.js";
+import { loadConfig, type ControlPlaneSession } from "../utils/config.js";
+import { CliError, ControlPlaneClient } from "../utils/control-plane.js";
 import type {
   ListPlatformTemplatesOptions,
   PlatformRunErrorDetails,
@@ -485,9 +487,23 @@ export class PlatformClient {
   }
 }
 
-export interface CreatePlatformClientOptions extends PlatformCredentialOptions, PlatformClientOptions {}
+export interface CreatePlatformClientOptions extends PlatformClientOptions {
+  session?: ControlPlaneSession;
+  controlPlane?: Pick<ControlPlaneClient, "ensureSelectedOrg">;
+}
 
 export async function createPlatformClientFromConfig(options: CreatePlatformClientOptions = {}): Promise<PlatformClient> {
-  const credentials = await resolvePlatformCredentials(options);
-  return new PlatformClient(credentials.origin, credentials.apiKey, { fetch: options.fetch });
+  const session = options.session ?? loadConfig().control_plane;
+  if (!session?.access_token) throw new CliError(2, "Platform templates require a control-plane session. Run ace login.");
+  // The platform has no MCP template-catalog/detail tools yet. REST uses only
+  // the API key from the same control-plane session and organization.
+  if (session.kind !== "api_key") {
+    throw new CliError(2, "Platform templates currently require API-key login for REST access. Run ace login --api-key-env <name> for this organization.");
+  }
+  const identity = await (options.controlPlane ?? new ControlPlaneClient(session)).ensureSelectedOrg();
+  if (typeof identity.organization_id !== "string" ||
+      (session.active_org_id && identity.organization_id !== session.active_org_id)) {
+    throw new CliError(2, "The selected organization could not be verified. Run ace org use or ace login again.");
+  }
+  return new PlatformClient(new URL(session.mcp_url).origin, session.access_token, { fetch: options.fetch });
 }

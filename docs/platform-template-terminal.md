@@ -1,4 +1,4 @@
-The terminal workspace includes **Platform templates**. Configure the separate platform connection with `ace templates login --url <platform-origin>`, then open the panel. The initial Ace screen does not read platform credentials or fetch templates.
+The terminal workspace includes **Platform templates**. Connect with `ace login` using an API key for the active organization, then open the panel. The platform does not yet expose the template catalog over MCP, so OAuth-only sessions receive an actionable error. The initial Ace screen does not fetch templates.
 
 Type to search titles, descriptions, and categories. Tab changes the category, arrow keys select, and Enter retrieves the selected version's authorized graph. Ctrl+R reloads the catalog. A listed template whose graph is inaccessible cannot be run from Ace.
 
