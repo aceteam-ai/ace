@@ -8,7 +8,7 @@ import { hooksPath, installHooks, hooksStatus, livenessHooks, mergeHooks } from 
 
 const roots: string[] = [];
 async function root() { const path = await mkdtemp(join(tmpdir(), "ace-hooks-test-")); roots.push(path); return path; }
-afterEach(async () => { for (const path of roots.splice(0)) await rm(path, { recursive: true, force: true }); });
+afterEach(async () => { for (const path of roots.splice(0)) await rm(path, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); });
 
 describe("liveness hook installation", () => {
   it.each(["claude-code", "codex"] as const)("installs %s into a temporary home idempotently without credentials", async harness => {
@@ -23,7 +23,10 @@ describe("liveness hook installation", () => {
     expect(config.hooks.PostToolUse).toEqual([{ hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "busy" }, timeout: harness === "codex" ? 2 : 1.5 }] }]);
     expect(config.hooks.Stop[0].hooks[0].input).toMatchObject({ drain: true, format: "hook", idle_on_empty: true });
     if (harness === "codex") expect(Number.isInteger(config.hooks.SessionEnd[0].hooks[0].timeout)).toBe(true);
-    else expect(config.hooks.SessionStart).toBeUndefined();
+    else {
+      expect(config.hooks.SessionStart).toBeUndefined();
+      expect(config.hooks.SessionEnd).toBeUndefined();
+    }
     expect(bytes.toLowerCase()).not.toMatch(/authorization|bearer|api_key|api-key|token/);
     expect(await installHooks(harness, "user", undefined, home, home)).toEqual([`${path}: no changes`]);
     expect(await readFile(path, "utf8")).toBe(bytes);
@@ -45,31 +48,31 @@ describe("liveness hook installation", () => {
     expect(existing.hooks.UserPromptSubmit[0].hooks[1].tool).toBe("session_register");
   });
 
-  it("removes the unsupported Claude SessionStart binding during upgrade", async () => {
+  it("removes obsolete Claude start and end bindings during upgrade", async () => {
     const home = await root();
     const path = hooksPath("claude-code", "user", home, home);
     const other = { type: "command", command: "echo custom" };
     await mkdir(join(home, ".claude"));
     await writeFile(path, JSON.stringify({ hooks: {
       SessionStart: [{ hooks: [other, { type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: {} }] }],
+      SessionEnd: [{ hooks: [other, { type: "mcp_tool", server: "aceteam", tool: "session_unregister", input: { harness_session_id: "${session_id}" } }] }],
     } }));
     const changes = await installHooks("claude-code", "user", undefined, home, home);
     expect(changes.some(line => line.includes("remove SessionStart session_heartbeat"))).toBe(true);
+    expect(changes.some(line => line.includes("remove SessionEnd session_unregister"))).toBe(true);
     const config = JSON.parse(await readFile(path, "utf8"));
     expect(config.hooks.SessionStart).toEqual([{ hooks: [other] }]);
+    expect(config.hooks.SessionEnd).toEqual([{ hooks: [other] }]);
     expect(await installHooks("claude-code", "user", undefined, home, home)).toEqual([`${path}: no changes`]);
   });
 
-  it("uses the registered Claude session identity to unregister from a fresh connection", () => {
+  it("registers the Claude session without installing unsupported lifecycle MCP calls", () => {
     const config = livenessHooks("claude-code", "machine", "ace-hooks-accept");
     const registration = config.hooks.UserPromptSubmit[0].hooks[0].input;
-    const end = config.hooks.SessionEnd[0].hooks[0].input;
-    const sessionId = "session-from-claude-hook";
-    const interpolate = (value: unknown) => value === "${session_id}" ? sessionId : value;
-    const leases = new Map([[interpolate(registration.harness_session_id), registration.name]]);
-    expect(leases.get(interpolate(end.harness_session_id))).toBe("ace-hooks-accept");
-    leases.delete(interpolate(end.harness_session_id));
-    expect(leases.size).toBe(0);
+    expect(registration.harness_session_id).toBe("${session_id}");
+    expect(registration.name).toBe("ace-hooks-accept");
+    expect(config.hooks.SessionStart).toBeUndefined();
+    expect(config.hooks.SessionEnd).toBeUndefined();
   });
 
   it("uses project scope and an explicit dedicated name only when requested", async () => {
@@ -121,7 +124,7 @@ describe("liveness hook installation", () => {
     const config = livenessHooks("claude-code");
     expect(config.hooks.PermissionRequest).toBeUndefined();
     expect(config.hooks.UserPromptSubmit[0].hooks[0].input.harness_session_id).toBe("${session_id}");
-    expect(config.hooks.SessionEnd[0].hooks[0].input.harness_session_id).toBe("${session_id}");
+    expect(config.hooks.SessionEnd).toBeUndefined();
     expect(config.hooks.Notification.map(group => group.matcher)).toEqual(["permission_prompt", "elicitation_dialog", "idle_prompt"]);
   });
 });

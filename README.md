@@ -24,7 +24,11 @@ These notifications need the companion blocked-state backend slice.
 
 Codex requires operator trust review before changed hooks can run. Its
 current MCP runtime does not support SessionEnd, so the configured teardown
-handler is best effort; use launcher attestation or the lease TTL. No hook
+handler is best effort. Claude Code's SessionStart MCP hook has no client
+context and its SessionEnd MCP hook opens a fresh connection that cannot
+unregister the lease. The installer omits both Claude bindings and removes
+them from existing installations. Dead sessions age out by lease TTL until
+aceteam-ai/aceteam#14132 supplies a supported teardown path. No hook
 answers a permission or trust prompt. Live transport identity and fleet
 acceptance remain verification gates for the companion backend change,
 aceteam-ai/aceteam#10469.

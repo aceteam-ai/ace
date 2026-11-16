@@ -37,10 +37,10 @@ export function livenessHooks(harness: Harness, machine = hostname(), name?: str
     UserPromptSubmit: [group(handler("session_heartbeat", { ...registration, state: "busy" }, 3))],
     PostToolUse: [group(handler("session_heartbeat", { state: "busy" }))],
     Stop: [group(handler("session_inbox", { drain: true, format: "hook", idle_on_empty: true, ...(harness === "codex" ? { harness_session_id: "${session_id}" } : {}) }, 10))],
-    SessionEnd: [group(handler("session_unregister", { harness_session_id: "${session_id}" }))],
   };
   if (harness === "codex") {
     hooks.SessionStart = [group(handler("session_heartbeat", registration, 3))];
+    hooks.SessionEnd = [group(handler("session_unregister", { harness_session_id: "${session_id}" }))];
   } else {
     hooks.Notification = [
       group(handler("session_heartbeat", { state: "blocked", blocked_on: "human:permission", reason: "Waiting for operator permission" }), "permission_prompt"),
@@ -82,6 +82,17 @@ export function mergeHooks(existing: HookConfig, desired: HookConfig): { config:
       return hooks.length ? [{ ...group, hooks }] : [];
     });
     if (!config.hooks.SessionStart.length) delete config.hooks.SessionStart;
+  }
+  if (!desired.hooks.SessionEnd && config.hooks.SessionEnd) {
+    config.hooks.SessionEnd = config.hooks.SessionEnd.flatMap(group => {
+      const hooks = group.hooks.filter(hook => {
+        const installed = hook.type === "mcp_tool" && hook.server === "aceteam" && hook.tool === "session_unregister";
+        if (installed) changes.push("remove SessionEnd session_unregister");
+        return !installed;
+      });
+      return hooks.length ? [{ ...group, hooks }] : [];
+    });
+    if (!config.hooks.SessionEnd.length) delete config.hooks.SessionEnd;
   }
   for (const [event, desiredGroups] of Object.entries(desired.hooks)) {
     const groups = config.hooks[event] ??= [];
