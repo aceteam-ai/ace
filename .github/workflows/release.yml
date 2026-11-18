@@ -82,4 +82,10 @@ jobs:
           VERSION: ${{ needs.plan.outputs.version }}
         run: |
           node scripts/extract-release-notes.mjs "$VERSION"
-          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "v$VERSION" --notes-file release-notes.md
+          if git show-ref --verify --quiet "refs/tags/v$VERSION"; then
+            test "$(git rev-list -n 1 "refs/tags/v$VERSION")" = "$GITHUB_SHA"
+          else
+            git tag "v$VERSION" "$GITHUB_SHA"
+          fi
+          git push origin "refs/tags/v$VERSION"
+          gh release create "v$VERSION" --verify-tag --title "v$VERSION" --notes-file release-notes.md
