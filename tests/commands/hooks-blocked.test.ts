@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 const questionInput = {
-  state: "blocked", blocked_on: "human:input", reason: "Waiting for an operator answer",
+  state: "blocked", blocked_on: "human:input", reason: "Waiting for an operator answer", format: "hook",
 };
 
 describe("S2 blocked-state installer companion", () => {
@@ -25,24 +25,24 @@ describe("S2 blocked-state installer companion", () => {
       matcher: "AskUserQuestion", hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: questionInput, timeout: 1.5 }],
     }]);
     expect(config.hooks.PostToolUse).toEqual([{
-      hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "busy" }, timeout: 1.5 }],
+      hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "busy", format: "hook" }, timeout: 1.5 }],
     }]);
     expect(config.hooks.Notification.map(group => group.matcher)).toEqual(["permission_prompt", "elicitation_dialog", "idle_prompt"]);
-    expect(config.hooks.Notification[1].hooks[0].input).toEqual({ state: "blocked", blocked_on: "human:input", reason: "Waiting for operator input" });
+    expect(config.hooks.Notification[1].hooks[0].input).toEqual({ state: "blocked", blocked_on: "human:input", reason: "Waiting for operator input", format: "hook" });
     expect(config.hooks.Stop[0].hooks[0].input).toEqual({ drain: true, format: "hook", idle_on_empty: true });
     expect(config.hooks.PermissionRequest).toBeUndefined();
     expect(config.hooks.Elicitation).toBeUndefined();
     expect(config.hooks.ElicitationResult).toBeUndefined();
-    expect(JSON.stringify(config).toLowerCase()).not.toMatch(/permissiondecision|updatedinput|hookspecificoutput|harness_session_id|authorization|bearer|api_key|api-key|token/);
+    expect(JSON.stringify(config).toLowerCase()).not.toMatch(/permissiondecision|updatedinput|hookspecificoutput|authorization|bearer|api_key|api-key|token/);
   });
 
   it("keeps Codex declaration-only and its S1 integer timeouts unchanged", () => {
     const config = livenessHooks("codex", "fixture-machine");
-    expect(Object.keys(config.hooks).sort()).toEqual(["PostToolUse", "SessionEnd", "SessionStart", "Stop", "UserPromptSubmit"]);
+    expect(Object.keys(config.hooks).sort()).toEqual(["PostToolUse", "SessionStart", "Stop", "UserPromptSubmit"]);
     expect(config.hooks.PostToolUse).toEqual([{
-      hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "busy" }, timeout: 2 }],
+      hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "busy", format: "hook" }, timeout: 2 }],
     }]);
-    expect(config.hooks.SessionEnd[0].hooks[0].timeout).toBe(2);
+    expect(config.hooks.SessionEnd).toBeUndefined();
     expect(config.hooks.UserPromptSubmit[0].hooks[0].input).toMatchObject({ state: "busy", harness_session_id: "${session_id}" });
     expect(config.hooks.Stop[0].hooks[0].input).toMatchObject({ idle_on_empty: true, harness_session_id: "${session_id}" });
   });

@@ -249,7 +249,7 @@ describe("built CLI diagnostic boundary", () => {
     const bytes = await readFile(configPath, "utf8");
     const config = JSON.parse(bytes);
     expect(config.hooks.PostToolUse).toEqual([{
-      hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "busy" }, timeout: harness === "codex" ? 2 : 1.5 }],
+      hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "busy", format: "hook" }, timeout: harness === "codex" ? 2 : 1.5 }],
     }]);
     const status = invoke("status");
     expect(status.status, status.stderr).toBe(0);
@@ -257,7 +257,7 @@ describe("built CLI diagnostic boundary", () => {
     expect(status.stdout).toContain("PostToolUse: session_heartbeat");
     if (harness === "claude-code") {
       expect(config.hooks.PreToolUse).toEqual([{
-        matcher: "AskUserQuestion", hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "blocked", blocked_on: "human:input", reason: "Waiting for an operator answer" }, timeout: 1.5 }],
+        matcher: "AskUserQuestion", hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "blocked", blocked_on: "human:input", reason: "Waiting for an operator answer", format: "hook" }, timeout: 1.5 }],
       }]);
       expect(status.stdout).toContain("PreToolUse (AskUserQuestion): session_heartbeat");
       expect(config.hooks.Notification.map((group: { matcher: string }) => group.matcher)).toEqual(["permission_prompt", "elicitation_dialog", "idle_prompt"]);
