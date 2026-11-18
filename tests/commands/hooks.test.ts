@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { hooksPath, installHooks, hooksStatus, livenessHooks, mergeHooks } from "../../src/commands/hooks.js";
+import { hooksPath, installHooks, uninstallHooks, hooksStatus, livenessHooks, mergeHooks } from "../../src/commands/hooks.js";
 
 const roots: string[] = [];
 async function root() { const path = await mkdtemp(join(tmpdir(), "ace-hooks-test-")); roots.push(path); return path; }
@@ -20,9 +20,17 @@ describe("liveness hook installation", () => {
     const config = JSON.parse(bytes);
     expect(config.hooks.UserPromptSubmit[0].hooks[0].input.presence_interval_s).toBe(300);
     expect(config.hooks.UserPromptSubmit[0].hooks[0].input.name).toBeUndefined();
-    expect(config.hooks.PostToolUse).toEqual([{ hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "busy" }, timeout: harness === "codex" ? 2 : 1.5 }] }]);
+    expect(config.hooks.PostToolUse).toEqual([{ hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "busy", format: "hook" }, timeout: harness === "codex" ? 2 : 1.5 }] }]);
     expect(config.hooks.Stop[0].hooks[0].input).toMatchObject({ drain: true, format: "hook", idle_on_empty: true });
-    if (harness === "codex") expect(Number.isInteger(config.hooks.SessionEnd[0].hooks[0].timeout)).toBe(true);
+    for (const groups of Object.values(config.hooks) as { hooks: { tool: string; input: Record<string, unknown> }[] }[][]) {
+      for (const group of groups) for (const hook of group.hooks) {
+        if (hook.tool === "session_heartbeat") expect(hook.input.format).toBe("hook");
+      }
+    }
+    if (harness === "codex") {
+      expect(config.hooks.SessionEnd).toBeUndefined();
+      expect(Number.isInteger(config.hooks.SessionStart[0].hooks[0].timeout)).toBe(true);
+    }
     else {
       expect(config.hooks.SessionStart).toBeUndefined();
       expect(config.hooks.SessionEnd).toBeUndefined();
@@ -99,6 +107,46 @@ describe("liveness hook installation", () => {
     expect(await installHooks("codex", "user", undefined, home, home)).toEqual([`${path}: no changes`]);
   });
 
+  it("removes the obsolete Codex SessionEnd hook on upgrade", async () => {
+    const home = await root();
+    const path = hooksPath("codex", "user", home, home);
+    const other = { type: "command", command: "echo custom" };
+    await mkdir(join(home, ".codex"));
+    await writeFile(path, JSON.stringify({ hooks: { SessionEnd: [{ hooks: [other, { type: "mcp_tool", server: "aceteam", tool: "session_unregister", input: {} }] }] } }));
+    const changes = await installHooks("codex", "user", undefined, home, home);
+    expect(changes.some(line => line.includes("remove SessionEnd session_unregister"))).toBe(true);
+    expect(JSON.parse(await readFile(path, "utf8")).hooks.SessionEnd).toEqual([{ hooks: [other] }]);
+  });
+
+  it("dry-runs installation without creating a file or directory", async () => {
+    const home = await root();
+    const path = hooksPath("codex", "user", home, home);
+    const lines = await installHooks("codex", "user", undefined, home, home, true);
+    expect(lines.join("\n")).toContain("add SessionStart session_heartbeat");
+    expect(lines.join("\n")).toContain('"format": "hook"');
+    await expect(readFile(path)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(home)).toEqual([]);
+  });
+
+  it("uninstalls only AceTeam MCP hooks and preserves unrelated handlers", async () => {
+    const home = await root();
+    const path = hooksPath("codex", "user", home, home);
+    const other = { type: "command", command: "echo custom" };
+    const peer = { type: "mcp_tool", server: "other", tool: "peer" };
+    await mkdir(join(home, ".codex"));
+    await writeFile(path, JSON.stringify({ privateSetting: "keep", hooks: {
+      SessionEnd: [{ hooks: [other, { type: "mcp_tool", server: "aceteam", tool: "session_unregister" }] }],
+      Stop: [{ hooks: [peer, { type: "mcp_tool", server: "aceteam", tool: "session_inbox" }] }],
+    } }));
+    const changes = await uninstallHooks("codex", "user", home, home);
+    expect(changes.join("\n")).toContain("remove SessionEnd session_unregister");
+    const remaining = JSON.parse(await readFile(path, "utf8"));
+    expect(remaining.privateSetting).toBe("keep");
+    expect(remaining.hooks.SessionEnd).toEqual([{ hooks: [other] }]);
+    expect(remaining.hooks.Stop).toEqual([{ hooks: [peer] }]);
+    expect(await uninstallHooks("codex", "user", home, home)).toEqual([`${path}: no changes`]);
+  });
+
   it("refuses malformed config without overwriting it", async () => {
     const home = await root(); await mkdir(join(home, ".codex"));
     const path = hooksPath("codex", "user", home, home);
@@ -152,6 +200,25 @@ describe("built CLI diagnostic boundary", () => {
     expect(built.error).toBeUndefined();
     expect(built.status, built.stderr).toBe(0);
   }, 70000);
+  it("exposes dry-run and uninstall without writing during preview", async () => {
+    const home = await root();
+    const args = ["hooks", "install", "--harness", "codex", "--dry-run"];
+    const run = (command: string[]) => spawnSync(process.env.ACE_TEST_NODE ?? process.execPath, [cli, ...command], {
+      cwd: home, env: { PATH: process.env.PATH, HOME: home, NO_COLOR: "1" }, encoding: "utf8", timeout: 10000,
+    });
+    const preview = run(args);
+    expect(preview.status, preview.stderr).toBe(0);
+    expect(preview.stdout).toContain("dry-run, no writes");
+    expect(preview.stdout).toContain("Resulting file:");
+    expect(await readdir(home)).toEqual([]);
+    expect(run(args.slice(0, -1)).status).toBe(0);
+    const path = hooksPath("codex", "user", home, home);
+    expect(await readFile(path, "utf8")).toContain('"format": "hook"');
+    const removed = run(["hooks", "uninstall", "--harness", "codex"]);
+    expect(removed.status, removed.stderr).toBe(0);
+    expect(removed.stdout).toContain("remove SessionStart session_heartbeat");
+    expect(JSON.parse(await readFile(path, "utf8")).hooks).toEqual({});
+  });
   // The existing interactive dependency requires Node 20. Hook commands do not.
   it.skipIf(Number(process.versions.node.split(".")[0]) < 20)("preserves top-level and unrelated command help", async () => {
     const home = await root();

@@ -31,7 +31,7 @@ export function livenessHooks(harness: Harness, machine = hostname(), name?: str
     harness_session_id: "${session_id}",
     ...(name ? { name } : {}),
   };
-  const handler = (tool: string, input: JsonObject, timeout = 1.5): Handler => ({ type: "mcp_tool", server: "aceteam", tool, input, timeout: harness === "codex" ? Math.ceil(timeout) : timeout });
+  const handler = (tool: string, input: JsonObject, timeout = 1.5): Handler => ({ type: "mcp_tool", server: "aceteam", tool, input: tool === "session_heartbeat" ? { ...input, format: "hook" } : input, timeout: harness === "codex" ? Math.ceil(timeout) : timeout });
   const group = (hook: Handler, matcher?: string): Group => ({ ...(matcher ? { matcher } : {}), hooks: [hook] });
   const hooks: Record<string, Group[]> = {
     UserPromptSubmit: [group(handler("session_heartbeat", { ...registration, state: "busy" }, 3))],
@@ -40,7 +40,6 @@ export function livenessHooks(harness: Harness, machine = hostname(), name?: str
   };
   if (harness === "codex") {
     hooks.SessionStart = [group(handler("session_heartbeat", registration, 3))];
-    hooks.SessionEnd = [group(handler("session_unregister", { harness_session_id: "${session_id}" }))];
   } else {
     hooks.Notification = [
       group(handler("session_heartbeat", { state: "blocked", blocked_on: "human:permission", reason: "Waiting for operator permission" }), "permission_prompt"),
@@ -135,22 +134,51 @@ async function readConfig(path: string): Promise<{ config: HookConfig; text: str
   }
 }
 
-export async function installHooks(harness: Harness, scope: Scope, name?: string, home?: string, cwd?: string): Promise<string[]> {
-  if (name && !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(name)) throw new HookConfigError("Name must be lowercase, start with a letter or digit, and contain at most 64 letters, digits, periods, underscores, or hyphens.");
-  const path = hooksPath(harness, scope, home, cwd);
-  const before = await readConfig(path);
-  const { config, changes } = mergeHooks(before.config, livenessHooks(harness, hostname(), name));
-  if (!changes.length) return [`${path}: no changes`];
+async function writeConfig(path: string, before: { text: string; mode: number }, config: HookConfig): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { flag: "wx", mode: before.mode });
-    // Avoid overwriting a concurrent editor's change.
     const current = await readConfig(path);
-    if (current.text !== before.text) throw new HookConfigError("Hook configuration changed during installation; retry after the other writer finishes.");
+    if (current.text !== before.text) throw new HookConfigError("Hook configuration changed during update; retry after the other writer finishes.");
     await rename(temporary, path);
   } finally { await unlink(temporary).catch(() => {}); }
-  return [`${path}:`, ...changes.map(change => `  + ${change}`)];
+}
+
+export async function installHooks(harness: Harness, scope: Scope, name?: string, home?: string, cwd?: string, dryRun = false): Promise<string[]> {
+  if (name && !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(name)) throw new HookConfigError("Name must be lowercase, start with a letter or digit, and contain at most 64 letters, digits, periods, underscores, or hyphens.");
+  const path = hooksPath(harness, scope, home, cwd);
+  const before = await readConfig(path);
+  const { config, changes } = mergeHooks(before.config, livenessHooks(harness, hostname(), name));
+  if (!changes.length && !dryRun) return [`${path}: no changes`];
+  if (!dryRun && changes.length) await writeConfig(path, before, config);
+  return [
+    `${path}:${dryRun ? " dry-run, no writes" : ""}`,
+    ...(changes.length ? changes.map(change => `  + ${change}`) : ["  no changes"]),
+    ...(dryRun ? ["Resulting file:", changes.length || !before.text ? `${JSON.stringify(config, null, 2)}\n` : before.text] : []),
+  ];
+}
+
+export async function uninstallHooks(harness: Harness, scope: Scope, home?: string, cwd?: string): Promise<string[]> {
+  const path = hooksPath(harness, scope, home, cwd);
+  const before = await readConfig(path);
+  const config = structuredClone(before.config);
+  const changes: string[] = [];
+  for (const [event, groups] of Object.entries(config.hooks)) {
+    config.hooks[event] = groups.flatMap(group => {
+      const hooks = group.hooks.filter(hook => {
+        if (hook.type !== "mcp_tool" || hook.server !== "aceteam") return true;
+        const label = bindingLabel(event, group, hook);
+        changes.push(`remove ${label.replace(": ", " ")}`);
+        return false;
+      });
+      return hooks.length ? [{ ...group, hooks }] : [];
+    });
+    if (!config.hooks[event].length) delete config.hooks[event];
+  }
+  if (!changes.length) return [`${path}: no changes`];
+  await writeConfig(path, before, config);
+  return [`${path}:`, ...changes.map(change => `  - ${change}`)];
 }
 
 export async function hooksStatus(harness: Harness, scope: Scope, home = homedir(), cwd = process.cwd()): Promise<string[]> {
@@ -177,7 +205,7 @@ export async function hooksStatus(harness: Harness, scope: Scope, home = homedir
       } catch { /* Status does not print credentials or configuration contents. */ }
     }
   }
-  return [path, ...events, `aceteam MCP server: ${configured ? "configured" : "not found"}`, ...(harness === "codex" ? ["Codex requires hook trust review. MCP SessionEnd hooks are currently unsupported."] : [])];
+  return [path, ...events, `aceteam MCP server: ${configured ? "configured" : "not found"}`, ...(harness === "codex" ? ["Codex requires hook trust review. SessionEnd MCP hooks are omitted because Codex does not support them."] : [])];
 }
 
 function harnessOption(value: string): Harness {
@@ -189,14 +217,14 @@ function scopeOption(value: string): Scope {
   return value;
 }
 export const hooksCommand = new Command("hooks").description("Install and inspect AceTeam harness liveness hooks");
-for (const operation of ["install", "status"]) {
+for (const operation of ["install", "status", "uninstall"]) {
   const command = hooksCommand.command(operation).requiredOption("--harness <harness>", "claude-code or codex", harnessOption).option("--scope <scope>", "user or project", scopeOption, "user");
-  if (operation === "install") command.option("--name <name>", "Dedicated launcher name; default derives each session name from its cwd");
-  command.action(async (options: { harness: Harness; scope: Scope; name?: string }) => {
+  if (operation === "install") command.option("--name <name>", "Dedicated launcher name; default derives each session name from its cwd").option("--dry-run", "Print planned changes and resulting file without writing");
+  command.action(async (options: { harness: Harness; scope: Scope; name?: string; dryRun?: boolean }) => {
     try {
-      const lines = operation === "install" ? await installHooks(options.harness, options.scope, options.name) : await hooksStatus(options.harness, options.scope);
+      const lines = operation === "install" ? await installHooks(options.harness, options.scope, options.name, undefined, undefined, options.dryRun) : operation === "uninstall" ? await uninstallHooks(options.harness, options.scope) : await hooksStatus(options.harness, options.scope);
       process.stdout.write(`${lines.join("\n")}\n`);
-      if (operation === "install" && options.harness === "codex") process.stdout.write("Review and trust the installed hooks in Codex. MCP SessionEnd hooks are currently unsupported.\n");
-    } catch (error) { command.error(error instanceof HookConfigError ? error.message : "Unable to read or install hook configuration.", { exitCode: 1, code: "ace.hooksConfigError" }); }
+      if (operation === "install" && options.harness === "codex" && !options.dryRun) process.stdout.write("Review and trust the installed hooks in Codex. SessionEnd MCP hooks are omitted.\n");
+    } catch (error) { command.error(error instanceof HookConfigError ? error.message : "Unable to read or update hook configuration.", { exitCode: 1, code: "ace.hooksConfigError" }); }
   });
 }
