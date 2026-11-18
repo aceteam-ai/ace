@@ -1,12 +1,20 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
+import { parse } from "yaml";
 
 const script = fileURLToPath(new URL("../../scripts/check-coauthor-trailers.mjs", import.meta.url));
 const fixtures: string[] = [];
+
+it("runs the attribution guard after PR metadata edits", () => {
+  const workflowPath = fileURLToPath(new URL("../../.github/workflows/ci.yml", import.meta.url));
+  const workflow = parse(readFileSync(workflowPath, "utf8"));
+  expect(workflow.on.pull_request.types).toContain("edited");
+  expect(workflow.jobs["no-coauthor-trailers"].name).toBe("No co-author trailers");
+});
 
 function fixture(message = "feat: clean change") {
   const root = mkdtempSync(join(tmpdir(), "ace-coauthor-guard-"));
