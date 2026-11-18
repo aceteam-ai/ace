@@ -1,0 +1,85 @@
+name: Release npm package
+
+on:
+  push:
+    branches: [main]
+    paths: [package.json]
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      publish: ${{ steps.plan.outputs.publish }}
+      release: ${{ steps.plan.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-plan.mjs
+
+  test:
+    needs: plan
+    if: needs.plan.outputs.publish == 'true' || needs.plan.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build
+      - run: node dist/index.js --version
+
+  publish:
+    needs: [plan, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm install --global npm@^11.5.1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint && pnpm test && pnpm build
+      - name: Inspect package contents
+        run: |
+          npm pack --dry-run --json > package-files.json
+          node -e 'const p=require("./package-files.json")[0]; if (!p.files.some(f=>f.path==="dist/index.js") || p.files.some(f=>!(/^(dist\/|LICENSE$|README\.md$|package\.json$)/.test(f.path)))) process.exit(1)'
+      - name: Publish with npm OIDC and provenance
+        if: needs.plan.outputs.publish == 'true'
+        run: npm publish --provenance --access public
+      - name: Create GitHub tag and release
+        if: needs.plan.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          node scripts/extract-release-notes.mjs "$VERSION"
+          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "v$VERSION" --notes-file release-notes.md
