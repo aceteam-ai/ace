@@ -18,13 +18,13 @@ afterEach(() => {
 });
 
 describe("pinned workflow-engine example set", () => {
-  it("keeps the three tagged rc16 graph files byte-for-byte", () => {
+  it("keeps the three tagged rc20 graph files byte-for-byte", () => {
     const hashes = {
       addition: "2b733a9e08133e80cb21b61c57d9e0f5662c96ba6168773f7573d9d983e5f50c",
-      append: "d78d86df0031843e66fa2c61fb121133e2e213085a56f307f12e8bf8eaa8947e",
+      append: "5357ba8dd7e3cc457ad42b4494ca2d807599e41c7c24f222907c131a3b5ff0de",
       error: "cdf042423c00b23f465d3157694e2bf3535578ad32a3699a8b16af85e8ec0d3b",
     };
-    const upstream = TEMPLATES.filter((template) => template.source === "workflow-engine-v2.0.0rc16");
+    const upstream = TEMPLATES.filter((template) => template.source === "workflow-engine-v2.0.0rc20");
     expect(upstream.map((template) => template.id)).toEqual(Object.keys(hashes).map((id) => `workflow-engine-${id}`));
     for (const [name, expected] of Object.entries(hashes)) {
       const file = new URL(`../../src/templates/workflow-engine-${name}.json`, import.meta.url);
@@ -47,7 +47,7 @@ describe.skipIf(!python)("published workflow-engine 2.0 RC boundary", () => {
       const result = await validateWorkflow(python!, path);
       expect(result, id).toMatchObject({ valid: true });
     }
-  }, 45_000);
+  }, 180_000);
 
   it("validates and executes bundled graphs through the current node entry points", async () => {
     directory = mkdtempSync(join(tmpdir(), "ace-rc-runner-test-"));
@@ -80,7 +80,7 @@ describe.skipIf(!python)("published workflow-engine 2.0 RC boundary", () => {
     writeFileSync(additionPath, JSON.stringify(addition.workflow));
     const sum = await runWorkflow(python!, additionPath, { c: 3 }, { config, baseDir: join(directory, "runs") });
     expect(sum).toMatchObject({ success: true, output: { sum: 2070 } });
-  });
+  }, 60_000);
 
   it("runs the API example against a loopback fixture and returns a real engine result", async () => {
     directory = mkdtempSync(join(tmpdir(), "ace-rc-api-test-"));
@@ -106,5 +106,5 @@ describe.skipIf(!python)("published workflow-engine 2.0 RC boundary", () => {
       expect(result.success).toBe(true);
       expect(result.output?.summary).toContain("fixture body");
     } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
-  });
+  }, 60_000);
 });

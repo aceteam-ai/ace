@@ -14,7 +14,7 @@ export interface TemplateMetadata {
   category: string;
   inputs: string[];
   workflow: WorkflowGraph;
-  source?: "workflow-engine-v2.0.0rc16";
+  source?: "workflow-engine-v2.0.0rc20";
   runtimeWarning?: string;
 }
 
@@ -23,7 +23,7 @@ function defineTemplate(
   category: string,
   workflow: Record<string, unknown>,
   runtimeWarning?: string,
-  metadata?: { name: string; description: string; source: "workflow-engine-v2.0.0rc16" }
+  metadata?: { name: string; description: string; source: "workflow-engine-v2.0.0rc20" }
 ): TemplateMetadata {
   const graph = parseWorkflowGraph(workflow);
   const inputs = Object.keys(getWorkflowInputFields(graph));
@@ -42,13 +42,13 @@ function defineTemplate(
 
 export const TEMPLATES: TemplateMetadata[] = [
   defineTemplate("workflow-engine-addition", "workflow-engine", engineAddition, undefined, {
-    name: "Addition", description: "Add two constants to an input number.", source: "workflow-engine-v2.0.0rc16",
+    name: "Addition", description: "Add two constants to an input number.", source: "workflow-engine-v2.0.0rc20",
   }),
   defineTemplate("workflow-engine-append", "workflow-engine", engineAppend, undefined, {
-    name: "Append", description: "Append text to a text file.", source: "workflow-engine-v2.0.0rc16",
+    name: "Append", description: "Append text to a text file.", source: "workflow-engine-v2.0.0rc20",
   }),
   defineTemplate("workflow-engine-error", "workflow-engine", engineError, undefined, {
-    name: "Error", description: "Demonstrate a node failure.", source: "workflow-engine-v2.0.0rc16",
+    name: "Error", description: "Demonstrate a node failure.", source: "workflow-engine-v2.0.0rc20",
   }),
   defineTemplate("hello-llm", "basics", helloLlm),
   defineTemplate("text-transform", "basics", textTransform),

@@ -28,7 +28,7 @@ import { DEMOS } from "../demos/index.js";
 import * as output from "../utils/output.js";
 
 const LEGACY_VENV_DIR = join(homedir(), ".ace", "venv");
-const DEFAULT_VENV_DIR = join(homedir(), ".ace", "venv-workflow2-rc16");
+const DEFAULT_VENV_DIR = join(homedir(), ".ace", "venv-workflow2-rc20");
 
 // ── Exported setup functions (reusable by TUI) ──────────────
 

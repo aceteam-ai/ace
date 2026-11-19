@@ -169,7 +169,7 @@ The TypeScript CLI handles file validation, Python detection, and output formatt
 - Network access for first-time runtime provisioning; Python 3.12+ is provisioned through uv when needed
 - An LLM provider — cloud API key **or** a local model server — for live LLM workflows (see below)
 
-Ace reuses an available uv installation or downloads its pinned official installer (0.12.12), checks its SHA-256 digest, and installs it under `~/.ace/bin`. The managed v2 environment pins `aceteam-nodes[llm]==0.8.0` and the latest published workflow-engine RC validated here, `aceteam-workflow-engine==2.0.0rc16`. Ace runs the engine directly because the nodes package now supplies entry points rather than a CLI. The older `~/.ace/venv` remains separate from the new `~/.ace/venv-workflow2-rc16`. Runtime setup is unnecessary for browsing, offline samples, or native harness sessions.
+Ace reuses an available uv installation or downloads its pinned official installer (0.12.12), checks its SHA-256 digest, and installs it under `~/.ace/bin`. The managed v2 environment pins `aceteam-nodes[llm]==0.8.0` and the latest published workflow-engine RC validated here, `aceteam-workflow-engine==2.0.0rc20`. Ace runs the engine directly because the nodes package now supplies entry points rather than a CLI. The older `~/.ace/venv` remains separate from the new `~/.ace/venv-workflow2-rc20`. Runtime setup is unnecessary for browsing, offline samples, or native harness sessions.
 
 ## Commands
 
@@ -177,7 +177,7 @@ Ace reuses an available uv installation or downloads its pinned official install
 
 Optional explicit setup; ordinary launcher startup skips this wizard. It:
 1. Detects Python 3.12+ (shows specific version error if too old)
-2. Creates a managed virtual environment at `~/.ace/venv-workflow2-rc16/`
+2. Creates a managed virtual environment at `~/.ace/venv-workflow2-rc20/`
 3. Installs `aceteam-nodes` into the venv
 4. Prompts for default model and saves `~/.ace/config.yaml`
 
@@ -225,7 +225,7 @@ api-to-llm      API to LLM      chains    url
 $ ace workflow list-templates --category workflow-engine
 ```
 
-The `workflow-engine` category copies the three graphs from the [v2.0.0rc16 library examples](https://github.com/aceteam-ai/workflow-engine/tree/v2.0.0rc16/examples). The other four entries are Ace LLM examples retained for local chat and CLI flows.
+The `workflow-engine` category copies the three graphs from the [v2.0.0rc20 library examples](https://github.com/aceteam-ai/workflow-engine/tree/v2.0.0rc20/examples). The other four entries are Ace LLM examples retained for local chat and CLI flows.
 
 ### `ace templates`
 
