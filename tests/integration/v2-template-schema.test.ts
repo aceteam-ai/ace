@@ -7,7 +7,7 @@ import { TEMPLATES, getTemplateById } from "../../src/templates/index.js";
  *
  * Key v2 requirements:
  * - input_node / output_node / inner_nodes / edges (not nodes/inputs/outputs)
- * - Field schemas use engine-supported type or title, never legacy value_type
+ * - Field schemas use engine-supported type, title, or x-value-type, never legacy value_type
  * - LLM node params: only "model" and "system_prompt" (no temperature/max_tokens)
  */
 describe("v2 template schema compliance", () => {
@@ -35,7 +35,7 @@ describe("v2 template schema compliance", () => {
       };
 
       for (const [fieldName, schema] of Object.entries(inputNode.params.fields)) {
-        expect('type' in schema || 'title' in schema, `${template.id}.input_node.${fieldName}: requires type or title`).toBe(true);
+        expect('type' in schema || 'title' in schema || 'x-value-type' in schema, `${template.id}.input_node.${fieldName}: requires type, title, or x-value-type`).toBe(true);
         expect(schema, `${template.id}.input_node.${fieldName}: must not use 'value_type'`).not.toHaveProperty("value_type");
       }
     }
@@ -48,7 +48,7 @@ describe("v2 template schema compliance", () => {
       };
 
       for (const [fieldName, schema] of Object.entries(outputNode.params.fields)) {
-        expect('type' in schema || 'title' in schema, `${template.id}.output_node.${fieldName}: requires type or title`).toBe(true);
+        expect('type' in schema || 'title' in schema || 'x-value-type' in schema, `${template.id}.output_node.${fieldName}: requires type, title, or x-value-type`).toBe(true);
         expect(schema, `${template.id}.output_node.${fieldName}: must not use 'value_type'`).not.toHaveProperty("value_type");
       }
     }
