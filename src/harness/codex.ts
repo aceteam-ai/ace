@@ -49,6 +49,8 @@ interface ActiveTurn {
   started: boolean;
   completed: boolean;
   outcome?: NativeHarnessTurnOutcome;
+  /** A user interrupt also stops external output waiting behind this turn. */
+  cancelQueuedExternalOutput?: boolean;
   startCall?: CodexRpcCall;
   interruptCall?: CodexRpcCall;
   settled: Promise<void>;
@@ -356,7 +358,9 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
       content: command.content,
     });
     const outputBytes = Buffer.byteLength(encodedOutput);
-    if (outputBytes > 512 * 1024) {
+    // Codex echoes output as a JSON string inside item/completed. Bound that
+    // second encoding, leaving at least 512 KiB for the notification envelope.
+    if (Buffer.byteLength(JSON.stringify(encodedOutput)) > 512 * 1024) {
       return rejected("invalid_external_output", "External output exceeds the bounded native intake size.");
     }
     // Never evict a delivery ID: even an unknown result must stay deduplicated.
@@ -387,6 +391,12 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     try {
       if (queuedBehind && !queuedBehind.completed) {
         await queuedBehind.settled;
+        if (queuedBehind.cancelQueuedExternalOutput) {
+          this.externalStatus(session, delivery, "cancelled", {
+            reason: "The user interrupted the turn ahead of this delivery. No native write was attempted.",
+          });
+          return { status: "ok", value: this.externalResult(delivery) };
+        }
         this.assertOpen(session);
         if (session.state !== "ready" || session.activeTurn) {
           throw new CodexError("invalid_state", "The native turn did not return to an idle state for queued external output.");
@@ -475,7 +485,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     return {
       deliveryId: delivery.deliveryId, status: delivery.status, mode: delivery.mode,
       nativeTurnId: delivery.nativeTurnId, nativeItemId: delivery.nativeItemId,
-      retrySafe: delivery.status === "received",
+      retrySafe: delivery.status === "received" || delivery.status === "cancelled",
     };
   }
 
@@ -485,7 +495,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     this.publish(session, {
       type: "external.output.status", deliveryId: delivery.deliveryId, status,
       source: structuredClone(delivery.source), mode: delivery.mode, nativeItemId: delivery.nativeItemId,
-      retrySafe: status === "received", nativeDetails,
+      retrySafe: status === "received" || status === "cancelled", nativeDetails,
     }, delivery.correlationId ?? delivery.deliveryId);
   }
 
@@ -498,6 +508,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
       return rejected("invalid_state", "Interrupt requires a live acknowledged turn and may only be sent once.");
     }
     session.interruptRequested = true;
+    active.cancelQueuedExternalOutput = true;
     this.clearApprovals(session, "interrupted");
     if (active.completed) return rejected("invalid_state", "The turn ended before an interrupt could be submitted.");
     try {

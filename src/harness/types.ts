@@ -69,6 +69,7 @@ export type NativeExternalOutputStatus =
   | "confirmed_accepted"
   | "processed"
   | "unsupported"
+  | "cancelled"
   | "unknown";
 
 export type NativeExternalOutputMode = "idle_started" | "busy_queued";
@@ -81,7 +82,7 @@ export interface NativeExternalOutputResult {
   nativeItemId?: string;
   /** True when this call observed a prior receipt instead of writing again. */
   duplicate?: boolean;
-  /** Unknown native submission outcomes are never safe for blind replay. */
+  /** Only definitely unwritten deliveries are safe for a deliberate retry. */
   retrySafe: boolean;
 }
 

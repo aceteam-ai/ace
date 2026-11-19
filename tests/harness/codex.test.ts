@@ -277,6 +277,44 @@ describe("Codex native thread adapter", () => {
     expect(await instance.adapter.sendInput({ type: "session.input", session: instance.session, input: "Still usable" })).toMatchObject({ status: "ok" });
   });
 
+  it.each(["\"", "\\"])("bounds the echoed frame for %s-heavy peer output", async (character) => {
+    const instance = await startedRig();
+    const source = { kind: "peer" as const, id: "peer-size" };
+    const encoded = (content: string, deliveryId: string) => JSON.stringify({
+      type: "aceteam.peer_message", deliveryId, source, content,
+    });
+    const echoedBytes = (count: number, deliveryId: string) =>
+      Buffer.byteLength(JSON.stringify(encoded(character.repeat(count), deliveryId)));
+    let low = 0;
+    let high = 262_144;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (echoedBytes(middle, "delivery-a") <= 512 * 1024) low = middle;
+      else high = middle - 1;
+    }
+    expect(echoedBytes(low, "delivery-a")).toBeLessThanOrEqual(512 * 1024);
+    expect(echoedBytes(low + 1, "delivery-b")).toBeGreaterThan(512 * 1024);
+    const accepted = await instance.adapter.deliverExternalOutput({
+      type: "session.external_output", session: instance.session, deliveryId: "delivery-a",
+      source, content: character.repeat(low),
+    });
+    expect(accepted).toMatchObject({ status: "ok", value: { status: "confirmed_accepted" } });
+    const output = instance.child.messages.at(-1)!.params.toolOutput.output;
+    const echoedFrame = JSON.stringify({ method: "item/completed", params: {
+      threadId, turnId, item: {
+        id: "echo-a", type: "functionCallOutput", name: "peer_message",
+        namespace: "aceteam.external", output,
+      },
+    } });
+    expect(Buffer.byteLength(echoedFrame)).toBeLessThan(1024 * 1024);
+    instance.child.send(JSON.parse(echoedFrame));
+    expect(await instance.adapter.deliverExternalOutput({
+      type: "session.external_output", session: instance.session, deliveryId: "delivery-b",
+      source, content: character.repeat(low + 1),
+    })).toMatchObject({ status: "rejected", code: "invalid_external_output" });
+    expect(instance.child.messages.filter((message) => message.method === "turn/start")).toHaveLength(1);
+  });
+
   it("retains an unknown delivery at the count limit without replay", async () => {
     const instance = await startedRig({ requestTimeoutMs: 20, handle: (_child, request) =>
       request.method === "turn/start" && Boolean(request.params.toolOutput) &&
@@ -326,6 +364,32 @@ describe("Codex native thread adapter", () => {
     expect(instance.child.messages.at(-1)?.params).toMatchObject({ threadId, input: [], toolOutput: {
       name: "peer_message", namespace: "aceteam.external",
     } });
+  });
+
+  it("cancels a delivery queued behind a user-interrupted turn without starting another turn", async () => {
+    const instance = await running();
+    const command = {
+      type: "session.external_output" as const, session: instance.session,
+      deliveryId: "delivery-interrupted-1",
+      source: { kind: "peer" as const, id: "peer-interrupted" }, content: "Do not wake the stopped session.",
+    };
+    const pending = instance.adapter.deliverExternalOutput(command);
+    expect(instance.child.messages.filter((message) => message.method === "turn/start")).toHaveLength(1);
+    expect(await instance.adapter.interrupt({ type: "session.interrupt", session: instance.session }))
+      .toMatchObject({ status: "ok" });
+    terminal(instance.child, "interrupted");
+    expect(await pending).toMatchObject({ status: "ok", value: {
+      status: "cancelled", mode: "busy_queued", retrySafe: true,
+    } });
+    expect(instance.events).toContainEqual(expect.objectContaining({
+      type: "external.output.status", deliveryId: command.deliveryId,
+      status: "cancelled", retrySafe: true,
+    }));
+    expect(instance.child.messages.filter((message) => message.method === "turn/start")).toHaveLength(1);
+    expect(await instance.adapter.deliverExternalOutput(command)).toMatchObject({
+      status: "ok", value: { status: "cancelled", duplicate: true, retrySafe: true },
+    });
+    expect(instance.child.messages.filter((message) => message.method === "turn/start")).toHaveLength(1);
   });
 
   it("reserves idle external delivery before observers can submit user input", async () => {

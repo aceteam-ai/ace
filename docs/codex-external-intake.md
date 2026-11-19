@@ -54,6 +54,7 @@ Observers receive `external.output.status` events with these distinct states:
 | `confirmed_accepted` | The correlated `turn/start` response identified the native turn. |
 | `processed` | A matching persisted `functionCallOutput` item was observed for the native turn. |
 | `unsupported` | Codex conclusively rejected the documented method or parameters. Keep the delivery available for manual review. |
+| `cancelled` | The user interrupted the turn ahead of a locally queued delivery. No native write occurred; deliberate retry is safe. |
 | `unknown` | Submission may have reached Codex, but no conclusive response survived. Do not replay automatically. |
 
 Idle delivery reserves and starts the one native turn before any observer or
@@ -62,12 +63,16 @@ then reserves a successor tool-output turn; it does not clear or answer pending
 approvals, and user input cannot overtake that queued delivery. Submissions are
 serialized. Repeating a `deliveryId` on the same connection returns the prior
 evidence with `duplicate: true` and never writes again, including after an
-unknown result. Durable duplicate suppression across restart belongs to the #18
+unknown or cancelled result. An interrupted queued delivery remains in the
+consumer journal for explicit review; the adapter never resumes it when the
+interrupted turn settles. Durable duplicate suppression across restart belongs to the #18
 consumer journal; this adapter intentionally does not persist delivery records.
 
 Each connection accepts at most 128 distinct deliveries and retains at most
 8 MiB of encoded output, including source fields and delivery IDs. The existing
-512 KiB per-delivery limit also applies. Records are never evicted during that
+512 KiB per-delivery limit applies to the doubly JSON-encoded output that Codex
+echoes in a notification, leaving headroom below the 1 MiB inbound frame cap.
+Records are never evicted during that
 connection: processed, unsupported and unknown IDs still return their previous
 evidence without resubmitting. Once either aggregate limit is reached, new IDs
 are rejected before any event, turn reservation or native write. The consumer
@@ -92,6 +97,10 @@ They use authored protocol fixtures and no credentials or model calls.
 No native-auth smoke test was run. The synthetic evidence proves request shape,
 correlation, and adapter state behavior; it does not claim live wake support or
 complete issue #19 transport/policy integration.
+
+Managed resume requires a thread created with the exact tested Codex CLI
+`0.154.0` version. A thread created with `0.153.4` cannot be resumed by this
+adapter until a compatible version path is added.
 
 Official interface reference:
 [Codex App Server](https://learn.chatgpt.com/docs/app-server).
