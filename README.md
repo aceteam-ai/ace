@@ -5,6 +5,17 @@
 
 AceTeam CLI for the control plane and local workflows.
 
+## Contributing commits
+
+Do not add `Co-authored-by:` attribution trailers to commits or pull request
+titles and bodies, including trailers naming your own accounts or aliases.
+The required `No co-author trailers` CI job checks every commit in the pull
+request and the text GitHub may use for its default squash message. If it
+fails, amend the named commits or reword the pull request, then push again.
+Repository administrators must add that job to the main branch ruleset's
+required checks. Merge operators should also supply an explicit squash
+subject and an empty squash body.
+
 ## Harness presence hooks
 
 After configuring the `aceteam` MCP server, install liveness hooks with
