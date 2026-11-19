@@ -330,6 +330,31 @@ describe("Codex native thread adapter", () => {
     expect(instance.child.messages).toHaveLength(before);
   });
 
+  it.each(["write failure", "pending write timeout"])(
+    "keeps external output uncertain without an unhandled RPC rejection on %s",
+    async (failure) => {
+      const instance = await startedRig({ requestTimeoutMs: 20 });
+      if (failure === "write failure") instance.child.failWrite = true;
+      else instance.child.hangWrite = true;
+      const command = {
+        type: "session.external_output" as const, session: instance.session,
+        deliveryId: `uncertain-${failure}`, source: { kind: "peer" as const, id: "peer-bound" },
+        content: "Synthetic handoff",
+      };
+      expect(await instance.adapter.deliverExternalOutput(command)).toMatchObject({
+        status: "ok", value: { status: "unknown", retrySafe: false },
+      });
+      const before = instance.child.messages.length;
+      expect(await instance.adapter.deliverExternalOutput(command)).toMatchObject({
+        status: "ok", value: { status: "unknown", duplicate: true, retrySafe: false },
+      });
+      expect(instance.child.messages).toHaveLength(before);
+      // Vitest also fails this test file if either RPC promise rejects without
+      // an observer after the delivery method returns.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  );
+
   it("queues busy external output on the active turn without resolving its pending approval", async () => {
     const instance = await running({ handle: (child, request) => {
       if (request.method === "turn/start" && request.params.toolOutput) {

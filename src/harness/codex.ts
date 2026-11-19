@@ -421,6 +421,10 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
       });
       delivery.call = call;
       if (idleActive) idleActive.startCall = call;
+      // Submission and result can reject together when a write fails. Observe
+      // the result immediately, before awaiting submission, so the failure is
+      // reconciled below without leaving an unhandled rejection behind.
+      void call.result.catch(() => {});
       await call.submitted;
       if (delivery.status === "received") this.externalStatus(session, delivery, "submitted");
       const response = await call.result;
