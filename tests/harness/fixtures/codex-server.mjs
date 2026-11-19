@@ -2,13 +2,13 @@
 import { createInterface } from "node:readline";
 const mode = process.argv[2];
 if (mode === "version") {
-  console.log("codex-cli 0.153.4");
+  console.log("codex-cli 0.154.0");
 } else {
   const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
   const turn = (status) => ({ id: "turn-synthetic", status, items: [], error: null });
   createInterface({ input: process.stdin }).on("line", (line) => {
     const request = JSON.parse(line);
-    if (request.method === "initialize") send({ id: request.id, result: { userAgent: "synthetic-codex/0.153.4" } });
+    if (request.method === "initialize") send({ id: request.id, result: { userAgent: "synthetic-codex/0.154.0" } });
     if (request.method === "account/read") send({ id: request.id, result: { account: null, requiresOpenaiAuth: false } });
     if (request.method === "thread/start") send({ id: request.id, result: { thread: { id: "thread-synthetic" }, model: "synthetic-model", modelProvider: "synthetic", cwd: request.params.cwd, approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: { type: "readOnly" } } });
     if (request.method === "turn/start") {
