@@ -26,6 +26,19 @@ export function planRelease(version, registry, releaseExists, sourceSha, tagSha 
   if (!published && latest && compareStableVersions(version, latest) <= 0) {
     throw new Error(`Refusing to publish ${version}: npm latest is ${latest}`);
   }
+  if (releaseExists && tagSha === null) {
+    throw new Error(`Refusing ${version}: GitHub release exists without its tag`);
+  }
+  if (published && releaseExists) {
+    const publishedHead = registry.versions[version]?.gitHead;
+    if (!/^[a-f0-9]{40}$/i.test(publishedHead ?? "")) {
+      throw new Error(`Cannot verify ${version}: npm publication has no source commit`);
+    }
+    if (tagSha.toLowerCase() !== publishedHead.toLowerCase()) {
+      throw new Error(`Refusing ${version}: existing GitHub tag differs from npm publication source`);
+    }
+    return { version, publish: false, release: false };
+  }
   if (published && !releaseExists) {
     const publishedHead = registry.versions[version]?.gitHead;
     if (!/^[a-f0-9]{40}$/i.test(publishedHead ?? "")) {
@@ -37,9 +50,6 @@ export function planRelease(version, registry, releaseExists, sourceSha, tagSha 
   }
   if (tagSha !== null && tagSha.toLowerCase() !== sourceSha.toLowerCase()) {
     throw new Error(`Refusing ${version}: existing GitHub tag points to another commit`);
-  }
-  if (releaseExists && tagSha === null) {
-    throw new Error(`Refusing ${version}: GitHub release exists without its tag`);
   }
   return { version, publish: !published, release: !releaseExists };
 }

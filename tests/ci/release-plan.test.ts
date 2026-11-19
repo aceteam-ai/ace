@@ -13,7 +13,17 @@ it("publishes and tags a new version", () => {
 });
 
 it("skips a version already published and tagged", () => {
-  expect(planRelease("0.3.0", registry, true, sourceSha, sourceSha)).toEqual({ version: "0.3.0", publish: false, release: false });
+  const published = { ...registry, versions: { "0.3.0": { gitHead: sourceSha } } };
+  expect(planRelease("0.3.0", published, true, otherSha, sourceSha)).toEqual({ version: "0.3.0", publish: false, release: false });
+});
+
+it("refuses a completed release when its tag differs from the npm source", () => {
+  const published = { ...registry, versions: { "0.3.0": { gitHead: sourceSha } } };
+  expect(() => planRelease("0.3.0", published, true, otherSha, otherSha)).toThrow("tag differs from npm publication source");
+});
+
+it("refuses a completed release without npm source evidence", () => {
+  expect(() => planRelease("0.3.0", registry, true, otherSha, sourceSha)).toThrow("no source commit");
 });
 
 it("recovers a release only when the npm source is this checkout", () => {
