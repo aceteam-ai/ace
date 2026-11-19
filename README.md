@@ -5,6 +5,17 @@
 
 AceTeam CLI for the control plane and local workflows.
 
+## Contributing commits
+
+Do not add `Co-authored-by:` attribution trailers to commits or pull request
+titles and bodies, including trailers naming your own accounts or aliases.
+The required `No co-author trailers` CI job checks every commit in the pull
+request and the text GitHub may use for its default squash message. If it
+fails, amend the named commits or reword the pull request, then push again.
+Repository administrators must add that job to the main branch ruleset's
+required checks. Merge operators should also supply an explicit squash
+subject and an empty squash body.
+
 ## Harness presence hooks
 
 After configuring the `aceteam` MCP server, install liveness hooks with
@@ -12,6 +23,10 @@ After configuring the `aceteam` MCP server, install liveness hooks with
 User scope is the default. Add `--scope project` for one repo, or `--name`
 for a dedicated launcher. Names otherwise derive from each session's cwd.
 `ace hooks status --harness claude-code` lists bindings and checks MCP setup.
+Use `ace hooks install --harness codex --dry-run` to see the exact planned
+changes and resulting hooks file without writing it. Run
+`ace hooks uninstall --harness codex` to remove only AceTeam MCP hooks;
+`--scope project` works for install, status, and uninstall.
 
 The installer preserves unrelated settings and hooks, prints changed
 bindings, and reports `no changes` on a repeat run. Hooks reuse the existing
@@ -23,8 +38,9 @@ observes permission and input notifications.
 These notifications need the companion blocked-state backend slice.
 
 Codex requires operator trust review before changed hooks can run. Its
-current MCP runtime does not support SessionEnd, so the configured teardown
-handler is best effort. Claude Code's SessionStart MCP hook has no client
+current MCP runtime does not support SessionEnd, so the installer omits
+that binding and removes an older AceTeam SessionEnd binding on upgrade.
+Claude Code's SessionStart MCP hook has no client
 context and its SessionEnd MCP hook opens a fresh connection that cannot
 unregister the lease. The installer omits both Claude bindings and removes
 them from existing installations. Dead sessions age out by lease TTL until
@@ -32,6 +48,17 @@ aceteam-ai/aceteam#14132 supplies a supported teardown path. No hook
 answers a permission or trust prompt. Live transport identity and fleet
 acceptance remain verification gates for the companion backend change,
 aceteam-ai/aceteam#10469.
+
+Heartbeat hooks use `format: "hook"`, which requires the server capability in
+aceteam-ai/aceteam#14149. An idle Codex session receives a peer message at
+its next turn end; these hooks do not wake it, so supervisor nudges remain
+necessary. Codex records hook trust per file, event, index and content hash
+in `~/.codex/config.toml` under `[hooks.state]`. The generated input includes
+`machine=<hostname>`, so review trust interactively on each host. Configure
+the AceTeam MCP server for the lane's cwd and run `ace hooks status --harness
+codex` before using the hooks. Status checks configuration, not live MCP
+connectivity. If Claude Code reports that the server is disconnected, use
+`/mcp` to reconnect it; queued messages remain available afterward.
 
 ## Install
 
