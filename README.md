@@ -5,6 +5,61 @@
 
 AceTeam CLI for the control plane and local workflows.
 
+## Contributing commits
+
+Do not add `Co-authored-by:` attribution trailers to commits or pull request
+titles and bodies, including trailers naming your own accounts or aliases.
+The required `No co-author trailers` CI job checks every commit in the pull
+request and the text GitHub may use for its default squash message. If it
+fails, amend the named commits or reword the pull request, then push again.
+Repository administrators must add that job to the main branch ruleset's
+required checks. Merge operators should also supply an explicit squash
+subject and an empty squash body.
+
+## Harness presence hooks
+
+After configuring the `aceteam` MCP server, install liveness hooks with
+`ace hooks install --harness claude-code` or `ace hooks install --harness codex`.
+User scope is the default. Add `--scope project` for one repo, or `--name`
+for a dedicated launcher. Names otherwise derive from each session's cwd.
+`ace hooks status --harness claude-code` lists bindings and checks MCP setup.
+Use `ace hooks install --harness codex --dry-run` to see the exact planned
+changes and resulting hooks file without writing it. Run
+`ace hooks uninstall --harness codex` to remove only AceTeam MCP hooks;
+`--scope project` works for install, status, and uninstall.
+
+The installer preserves unrelated settings and hooks, prints changed
+bindings, and reports `no changes` on a repeat run. Hooks reuse the existing
+MCP connection and contain no credentials. User input records busy; Stop
+drains pending messages before declaring idle. Both harnesses refresh busy
+presence after supported tool completions, including local tools. MCP hooks
+reuse the connection without triggering other hooks. Claude Code additionally
+observes permission and input notifications.
+These notifications need the companion blocked-state backend slice.
+
+Codex requires operator trust review before changed hooks can run. Its
+current MCP runtime does not support SessionEnd, so the installer omits
+that binding and removes an older AceTeam SessionEnd binding on upgrade.
+Claude Code's SessionStart MCP hook has no client
+context and its SessionEnd MCP hook opens a fresh connection that cannot
+unregister the lease. The installer omits both Claude bindings and removes
+them from existing installations. Dead sessions age out by lease TTL until
+aceteam-ai/aceteam#14132 supplies a supported teardown path. No hook
+answers a permission or trust prompt. Live transport identity and fleet
+acceptance remain verification gates for the companion backend change,
+aceteam-ai/aceteam#10469.
+
+Heartbeat hooks use `format: "hook"`, which requires the server capability in
+aceteam-ai/aceteam#14149. An idle Codex session receives a peer message at
+its next turn end; these hooks do not wake it, so supervisor nudges remain
+necessary. Codex records hook trust per file, event, index and content hash
+in `~/.codex/config.toml` under `[hooks.state]`. The generated input includes
+`machine=<hostname>`, so review trust interactively on each host. Configure
+the AceTeam MCP server for the lane's cwd and run `ace hooks status --harness
+codex` before using the hooks. Status checks configuration, not live MCP
+connectivity. If Claude Code reports that the server is disconnected, use
+`/mcp` to reconnect it; queued messages remain available afterward.
+
 ## Install
 
 ```bash
@@ -141,7 +196,7 @@ The TypeScript CLI handles file validation, Python detection, and output formatt
 - Network access for first-time runtime provisioning; Python 3.12+ is provisioned through uv when needed
 - An LLM provider — cloud API key **or** a local model server — for live LLM workflows (see below)
 
-Ace reuses an available uv installation or downloads its pinned official installer (0.12.12), checks its SHA-256 digest, and installs it under `~/.ace/bin`. The managed v2 environment pins `aceteam-nodes[llm]==0.8.0` and the latest published workflow-engine RC validated here, `aceteam-workflow-engine==2.0.0rc16`. Ace runs the engine directly because the nodes package now supplies entry points rather than a CLI. The older `~/.ace/venv` remains separate from the new `~/.ace/venv-workflow2-rc16`. Runtime setup is unnecessary for browsing, offline samples, or native harness sessions.
+Ace reuses an available uv installation or downloads its pinned official installer (0.12.12), checks its SHA-256 digest, and installs it under `~/.ace/bin`. The managed v2 environment pins `aceteam-nodes[llm]==0.8.0` and the latest published workflow-engine RC validated here, `aceteam-workflow-engine==2.0.0rc20`. Ace runs the engine directly because the nodes package now supplies entry points rather than a CLI. The older `~/.ace/venv` remains separate from the new `~/.ace/venv-workflow2-rc20`. Runtime setup is unnecessary for browsing, offline samples, or native harness sessions.
 
 ## Commands
 
@@ -149,7 +204,7 @@ Ace reuses an available uv installation or downloads its pinned official install
 
 Optional explicit setup; ordinary launcher startup skips this wizard. It:
 1. Detects Python 3.12+ (shows specific version error if too old)
-2. Creates a managed virtual environment at `~/.ace/venv-workflow2-rc16/`
+2. Creates a managed virtual environment at `~/.ace/venv-workflow2-rc20/`
 3. Installs `aceteam-nodes` into the venv
 4. Prompts for default model and saves `~/.ace/config.yaml`
 
@@ -197,7 +252,7 @@ api-to-llm      API to LLM      chains    url
 $ ace workflow list-templates --category workflow-engine
 ```
 
-The `workflow-engine` category copies the three graphs from the [v2.0.0rc16 library examples](https://github.com/aceteam-ai/workflow-engine/tree/v2.0.0rc16/examples). The other four entries are Ace LLM examples retained for local chat and CLI flows.
+The `workflow-engine` category copies the three graphs from the [v2.0.0rc20 library examples](https://github.com/aceteam-ai/workflow-engine/tree/v2.0.0rc20/examples). The other four entries are Ace LLM examples retained for local chat and CLI flows.
 
 ### `ace templates`
 

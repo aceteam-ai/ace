@@ -1,17 +1,9 @@
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
-import { initCommand } from "./commands/init.js";
-import { workflowCommand } from "./commands/workflow.js";
-import { templatesCommand } from "./commands/templates.js";
-import { fabricCommand } from "./commands/fabric.js";
-import { runCommand } from "./commands/run.js";
-import { loginCommand, logoutCommand } from "./commands/login.js";
-import { mcpCommand, orgCommand, whoamiCommand } from "./commands/control-plane.js";
-import { addCompletionCommands } from "./commands/completion.js";
-import { agentCommand } from "./commands/agent.js";
 import { beginLegacyOutput, finishLegacyOutput } from "./utils/legacy-output.js";
 import { CliError } from "./utils/control-plane.js";
+import { hooksCommand } from "./commands/hooks.js";
 
 function addOutputOptions(command: Command): void {
   const options = command.options.map((option) => option.long);
@@ -31,29 +23,45 @@ function configureErrorHandling(command: Command): void {
   for (const child of command.commands) configureErrorHandling(child);
 }
 
-export function createProgram(): Command {
+export async function createProgram(argv = process.argv): Promise<Command> {
   const program = new Command();
 
   program
     .name("ace")
     .description("AceTeam CLI for the control plane and local workflows")
-    .version("0.3.0")
+    .version("0.4.0")
     .enablePositionalOptions()
     .option("--json", "Output JSON")
     .option("--quiet", "Suppress successful output");
 
-  program.addCommand(initCommand);
-  program.addCommand(runCommand);
-  program.addCommand(workflowCommand);
-  program.addCommand(templatesCommand);
-  program.addCommand(fabricCommand);
-  program.addCommand(loginCommand);
-  program.addCommand(logoutCommand);
-  program.addCommand(whoamiCommand);
-  program.addCommand(orgCommand);
-  program.addCommand(mcpCommand);
-  program.addCommand(agentCommand);
-  addCompletionCommands(program);
+  // Hook installation must remain usable without loading the interactive
+  // command runtime, which requires a newer Node release.
+  if (argv[2] !== "hooks") {
+    const [init, run, workflow, templates, fabric, login, controlPlane, completion, agent] = await Promise.all([
+      import("./commands/init.js"),
+      import("./commands/run.js"),
+      import("./commands/workflow.js"),
+      import("./commands/templates.js"),
+      import("./commands/fabric.js"),
+      import("./commands/login.js"),
+      import("./commands/control-plane.js"),
+      import("./commands/completion.js"),
+      import("./commands/agent.js"),
+    ]);
+    program.addCommand(init.initCommand);
+    program.addCommand(run.runCommand);
+    program.addCommand(workflow.workflowCommand);
+    program.addCommand(templates.templatesCommand);
+    program.addCommand(fabric.fabricCommand);
+    program.addCommand(login.loginCommand);
+    program.addCommand(login.logoutCommand);
+    program.addCommand(controlPlane.whoamiCommand);
+    program.addCommand(controlPlane.orgCommand);
+    program.addCommand(controlPlane.mcpCommand);
+    program.addCommand(agent.agentCommand);
+    completion.addCompletionCommands(program);
+  }
+  program.addCommand(hooksCommand);
 
   addOutputOptions(program);
   configureErrorHandling(program);
@@ -70,11 +78,11 @@ export async function main(argv = process.argv): Promise<void> {
       const { startInteractive } = await import("./commands/interactive.js");
       await startInteractive();
     } else {
-      createProgram().outputHelp();
+      (await createProgram(argv)).outputHelp();
     }
     return;
   }
-  const program = createProgram();
+  const program = await createProgram(argv);
   try {
     await program.parseAsync(argv);
   } catch (error) {
@@ -89,6 +97,11 @@ export async function main(argv = process.argv): Promise<void> {
       } else if (error instanceof CommanderError) {
         if (error.code === "commander.helpDisplayed" || error.code === "commander.version") {
           process.exitCode = 0;
+        } else if (error.code === "ace.hooksConfigError") {
+          process.exitCode = 1;
+          if (process.argv.includes("--json")) {
+            console.error(JSON.stringify({ error: { code: 1, message: error.message } }));
+          }
         } else {
           process.exitCode = 2;
           if (process.argv.includes("--json")) {
