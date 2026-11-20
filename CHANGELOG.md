@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 - 2026-11-19
+
+### Local WorkflowGraphs
+
+- Run local WorkflowGraphs with workflow-engine 2.0.0rc20 and aceteam-nodes 0.8.0. Bundle the tagged `addition`, `append`, and `error` examples byte for byte, and keep the earlier Ace examples available (#31).
+
+### Native Codex sessions
+
+- Add external peer-output intake through Codex `functionCallOutput`, with delivery correlation, busy-turn queuing, interrupt cancellation, and bounded input handling (#32).
+- Tighten duplicate delivery receipts so a reused ID cannot change peer identity or content, cancelled deliveries require a new ID, and output matches the native turn that received it (#56).
+
+### Test stability
+
+- Wait for Ink screen and callback updates in native handoff, template, and model tests to remove render timing races (#54).
+
 ## 0.4.0 - 2026-11-18
 
 ### Native sessions and launcher

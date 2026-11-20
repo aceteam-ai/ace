@@ -29,7 +29,7 @@ export async function createProgram(argv = process.argv): Promise<Command> {
   program
     .name("ace")
     .description("AceTeam CLI for the control plane and local workflows")
-    .version("0.4.0")
+    .version("0.5.0")
     .enablePositionalOptions()
     .option("--json", "Output JSON")
     .option("--quiet", "Suppress successful output");
