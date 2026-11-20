@@ -25,6 +25,8 @@ async function enter(service = new SyntheticPlatformTemplates(), columns = 80, r
   await press(view, "\u001b"); for (let i = 0; i < 5; i++) await press(view, "j"); await press(view, "\r");
   await vi.waitFor(() => expect(service.listCalls).toHaveLength(1));
   await vi.waitFor(() => expect(view.lastFrame()).toContain("[General]"));
+  await vi.waitFor(() => expect(view.lastFrame()).toContain("Type Search"));
+  await tick();
   return { service, view, panel };
 }
 async function inputs(view: ReturnType<typeof render>) {

@@ -49,12 +49,13 @@ describe("terminal workspace", () => {
   it("keeps typed question marks and uses Tab for input help", async () => {
     const fake = service({ detectProvider: async () => ({ provider: "openai", model: "gpt-test" }) });
     const view = render(<App service={fake} />);
+    await vi.waitFor(() => expect(view.lastFrame()).toContain("OpenAI (gpt-test)"));
     await tick();
     view.stdin.write("\r");
+    await vi.waitFor(() => expect(view.lastFrame()).toContain("Enter text"));
     await tick();
     view.stdin.write("why?");
-    await tick();
-    expect(view.lastFrame()).toContain("why?");
+    await vi.waitFor(() => expect(view.lastFrame()).toContain("why?"));
     view.stdin.write("\t");
     expect(view.lastFrame()).toContain("Keys");
     view.stdin.write("\t");
