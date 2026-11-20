@@ -7,7 +7,7 @@ permissions. Claude Agent uses its SDK runtime, the supported environment API-ke
 route, and Claude native permission settings; it does not use Codex sign-in. The
 shared panels preserve each provider's native permission details and supported actions. Browsing and native sessions require neither Python setup nor
 an AceTeam account. This integration currently validates exactly Codex CLI
-`0.153.4`; missing installation, unsupported versions, and missing native sign-in
+`0.154.0`; missing installation, unsupported versions, and missing native sign-in
 produce an actionable error. Sign in separately using `codex login` if needed.
 
 Claude may become ready for input before its first native session identity is

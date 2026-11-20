@@ -124,7 +124,7 @@ describe("handoff and provider review UI", () => {
     Object.defineProperty(view.stdout, "columns", { value: 48, configurable: true }); Object.defineProperty(view.stdout, "rows", { value: 12, configurable: true }); view.stdout.emit("resize"); await tick();
     expect(view.lastFrame()).toContain("Confirmation paused"); await press(view, "y"); expect(natives).toEqual([]);
     Object.defineProperty(view.stdout, "rows", { value: 24, configurable: true }); view.stdout.emit("resize"); await tick();
-    await press(view, "n"); expect(back).toHaveBeenCalledOnce(); expect(natives).toEqual([]);
+    await press(view, "n"); await vi.waitFor(() => expect(back).toHaveBeenCalledOnce()); expect(natives).toEqual([]);
   });
 });
 
@@ -204,14 +204,18 @@ it.each(["normal", "small"] as const)("Escape during delayed handoff start cance
 
 it("opens a fresh workspace after closing and reselecting the same provider", async () => {
   const view = render(<ManagedNativeWorkspace controller={controller} workspace={workspace} back={() => {}} />); await tick();
-  await press(view, "\r"); await press(view, "\r"); await press(view, "\r");
+  await press(view, "\r"); await vi.waitFor(() => expect(view.lastFrame()).toContain("Codex workspace directory"));
+  await press(view, "\r"); await vi.waitFor(() => expect(view.lastFrame()).toContain("Start new session"));
+  await press(view, "\r");
   await vi.waitFor(() => expect(view.lastFrame()).toContain("Codex · Ready"));
   const oldIdentity = controller.selectedService!.getSnapshot().identity;
   const start = vi.spyOn(natives[0], "start");
   await press(view, "x"); await vi.waitFor(() => expect(view.lastFrame()).toContain("Codex · Closed"));
-  await press(view, "n"); await press(view, "\r");
-  expect(view.lastFrame()).toContain("Codex workspace directory"); expect(start).not.toHaveBeenCalled();
-  await press(view, "\r"); await press(view, "\r");
+  await press(view, "n"); await vi.waitFor(() => expect(view.lastFrame()).toContain("Native coding session"));
+  expect(start).not.toHaveBeenCalled();
+  await press(view, "\r"); await vi.waitFor(() => expect(view.lastFrame()).toContain("Codex workspace directory"));
+  await press(view, "\r"); await vi.waitFor(() => expect(view.lastFrame()).toContain("Start new session"));
+  await press(view, "\r");
   await vi.waitFor(() => expect(view.lastFrame()).toContain("Codex · Ready"));
   expect(start).toHaveBeenCalledOnce(); expect(controller.selectedService!.getSnapshot().identity?.sessionId).not.toBe(oldIdentity?.sessionId);
 });
