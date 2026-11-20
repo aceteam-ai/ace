@@ -247,6 +247,57 @@ describe("Codex native thread adapter", () => {
     expect(instance.child.messages.filter((message) => message.method === "turn/start")).toHaveLength(before);
   });
 
+  it("does not treat the same output in a different native turn as processed", async () => {
+    const instance = await startedRig();
+    const events: NativeHarnessEvent[] = [];
+    instance.adapter.observe({ type: "session.observe", session: instance.session }, (event) => events.push(event));
+    const command = {
+      type: "session.external_output" as const, session: instance.session,
+      deliveryId: "delivery-turn-bound", source: { kind: "peer" as const, id: "peer-bound" },
+      content: "Same output in another turn must not count.",
+    };
+    expect(await instance.adapter.deliverExternalOutput(command)).toMatchObject({
+      status: "ok", value: { status: "confirmed_accepted", nativeTurnId: turnId },
+    });
+    const output = instance.child.messages.at(-1)!.params.toolOutput.output;
+    terminal(instance.child);
+    expect(await instance.adapter.sendInput({ type: "session.input", session: instance.session, input: "Next turn" }))
+      .toMatchObject({ status: "ok" });
+    instance.child.notify("item/completed", { threadId, turnId: `${turnId}-2`, item: {
+      id: "unrelated-output", type: "functionCallOutput", name: "peer_message",
+      namespace: "aceteam.external", output,
+    } });
+    expect(await instance.adapter.deliverExternalOutput(command)).toMatchObject({
+      status: "ok", value: { status: "confirmed_accepted", nativeItemId: undefined,
+        nativeTurnId: turnId, duplicate: true, retrySafe: false },
+    });
+    expect(events.filter((event) => event.type === "external.output.status" && event.status === "processed"))
+      .toHaveLength(0);
+  });
+
+  it("rejects delivery ID reuse with changed content or peer identity", async () => {
+    const instance = await startedRig();
+    const command = {
+      type: "session.external_output" as const, session: instance.session,
+      deliveryId: "delivery-conflict", source: { kind: "peer" as const, id: "peer-original" },
+      content: "Original content",
+    };
+    expect(await instance.adapter.deliverExternalOutput(command)).toMatchObject({ status: "ok" });
+    const before = instance.child.messages.length;
+    for (const changed of [
+      { ...command, content: "Changed content" },
+      { ...command, source: { kind: "peer" as const, id: "another-peer" } },
+    ]) {
+      expect(await instance.adapter.deliverExternalOutput(changed)).toMatchObject({
+        status: "rejected", code: "invalid_external_output",
+      });
+    }
+    expect(await instance.adapter.deliverExternalOutput(command)).toMatchObject({
+      status: "ok", value: { duplicate: true, retrySafe: false },
+    });
+    expect(instance.child.messages).toHaveLength(before);
+  });
+
   it("bounds retained delivery IDs without replaying processed duplicates at capacity", async () => {
     const instance = await startedRig();
     for (let i = 0; i < 128; i++) {
@@ -260,6 +311,10 @@ describe("Codex native thread adapter", () => {
     expect(await instance.adapter.deliverExternalOutput({
       type: "session.external_output", session: instance.session, deliveryId: "bounded-0",
       source: { kind: "peer", id: "peer-bound" }, content: "Changed duplicate content",
+    })).toMatchObject({ status: "rejected", code: "invalid_external_output" });
+    expect(await instance.adapter.deliverExternalOutput({
+      type: "session.external_output", session: instance.session, deliveryId: "bounded-0",
+      source: { kind: "peer", id: "peer-bound" }, content: "Synthetic handoff",
     })).toMatchObject({ status: "ok", value: { status: "processed", duplicate: true, retrySafe: false } });
     expect(instance.child.messages).toHaveLength(before);
   });
@@ -391,6 +446,23 @@ describe("Codex native thread adapter", () => {
     } });
   });
 
+  it("never calls a duplicate busy queued delivery retry-safe", async () => {
+    const instance = await running();
+    const command = {
+      type: "session.external_output" as const, session: instance.session,
+      deliveryId: "delivery-queued-duplicate",
+      source: { kind: "peer" as const, id: "peer-queued" }, content: "Queued content",
+    };
+    const pending = instance.adapter.deliverExternalOutput(command);
+    expect(await instance.adapter.deliverExternalOutput(command)).toMatchObject({
+      status: "ok", value: { status: "received", mode: "busy_queued", duplicate: true, retrySafe: false },
+    });
+    expect(instance.child.messages.filter((message) => message.params?.toolOutput)).toHaveLength(0);
+    terminal(instance.child);
+    expect(await pending).toMatchObject({ status: "ok", value: { status: "confirmed_accepted" } });
+    expect(instance.child.messages.filter((message) => message.params?.toolOutput)).toHaveLength(1);
+  });
+
   it("cancels a delivery queued behind a user-interrupted turn without starting another turn", async () => {
     const instance = await running();
     const command = {
@@ -412,7 +484,7 @@ describe("Codex native thread adapter", () => {
     }));
     expect(instance.child.messages.filter((message) => message.method === "turn/start")).toHaveLength(1);
     expect(await instance.adapter.deliverExternalOutput(command)).toMatchObject({
-      status: "ok", value: { status: "cancelled", duplicate: true, retrySafe: true },
+      status: "ok", value: { status: "cancelled", duplicate: true, retrySafe: false },
     });
     expect(instance.child.messages.filter((message) => message.method === "turn/start")).toHaveLength(1);
   });
