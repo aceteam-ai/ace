@@ -54,7 +54,7 @@ Observers receive `external.output.status` events with these distinct states:
 | `confirmed_accepted` | The correlated `turn/start` response identified the native turn. |
 | `processed` | A matching persisted `functionCallOutput` item was observed for the native turn. |
 | `unsupported` | Codex conclusively rejected the documented method or parameters. Keep the delivery available for manual review. |
-| `cancelled` | The user interrupted the turn ahead of a locally queued delivery. No native write occurred; deliberate retry is safe. |
+| `cancelled` | The user interrupted the turn ahead of a locally queued delivery. No native write occurred; deliberate retry requires a new delivery ID. |
 | `unknown` | Submission may have reached Codex, but no conclusive response survived. Do not replay automatically. |
 
 Idle delivery reserves and starts the one native turn before any observer or
@@ -63,7 +63,9 @@ then reserves a successor tool-output turn; it does not clear or answer pending
 approvals, and user input cannot overtake that queued delivery. Submissions are
 serialized. Repeating a `deliveryId` on the same connection returns the prior
 evidence with `duplicate: true` and never writes again, including after an
-unknown or cancelled result. An interrupted queued delivery remains in the
+unknown or cancelled result. A duplicate receipt always has `retrySafe: false`
+because reusing the same ID never submits again. Reusing an ID with changed
+peer identity or content is rejected. An interrupted queued delivery remains in the
 consumer journal for explicit review; the adapter never resumes it when the
 interrupted turn settles. Durable duplicate suppression across restart belongs to the #18
 consumer journal; this adapter intentionally does not persist delivery records.

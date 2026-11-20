@@ -334,13 +334,26 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
     if (typeof command.deliveryId !== "string" || typeof command.content !== "string") {
       return rejected("invalid_external_output", "External output requires a delivery ID, peer identity, and nonempty content.");
     }
-    const prior = session.externalDeliveries.get(command.deliveryId);
-    if (prior) return { status: "ok", value: { ...this.externalResult(prior), duplicate: true } };
     const source = command.source;
     if (!command.deliveryId.trim() || !object(source) || source.kind !== "peer" || typeof source.id !== "string" ||
         !source.id.trim() || (source.label !== undefined && typeof source.label !== "string") ||
         Object.keys(source).some((key) => !["kind", "id", "label"].includes(key)) || !command.content.trim()) {
       return rejected("invalid_external_output", "External output requires a delivery ID, peer identity, and nonempty content.");
+    }
+    const encodedOutput = JSON.stringify({
+      type: "aceteam.peer_message",
+      deliveryId: command.deliveryId,
+      source: { kind: "peer", id: source.id, ...(source.label === undefined ? {} : { label: source.label }) },
+      content: command.content,
+    });
+    const prior = session.externalDeliveries.get(command.deliveryId);
+    if (prior) {
+      if (prior.encodedOutput !== encodedOutput) {
+        return rejected("invalid_external_output", "This delivery ID already belongs to different peer content.");
+      }
+      // A duplicate never writes, even when a cancelled delivery could be
+      // deliberately retried under a new ID.
+      return { status: "ok", value: { ...this.externalResult(prior), retrySafe: false, duplicate: true } };
     }
     if (session.externalSubmitting) {
       return rejected("invalid_state", "Another external output submission is still being reconciled.");
@@ -351,12 +364,6 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
         (busy && session.state !== "running" && session.state !== "waiting_for_approval")) {
       return rejected("invalid_state", "External output requires a ready session or a live native turn.");
     }
-    const encodedOutput = JSON.stringify({
-      type: "aceteam.peer_message",
-      deliveryId: command.deliveryId,
-      source: { kind: "peer", id: source.id, ...(source.label === undefined ? {} : { label: source.label }) },
-      content: command.content,
-    });
     const outputBytes = Buffer.byteLength(encodedOutput);
     // Codex echoes output as a JSON string inside item/completed. Bound that
     // second encoding, leaving at least 512 KiB for the notification envelope.
@@ -929,6 +936,7 @@ export class CodexNativeHarnessAdapter implements NativeHarnessAdapter {
           typeof item.output === "string") {
         const delivery = [...session.externalDeliveries.values()].find((candidate) =>
           candidate.encodedOutput === item.output &&
+          candidate.call !== undefined && candidate.call === session.activeTurn?.startCall &&
           candidate.status !== "unknown" && candidate.status !== "unsupported");
         if (delivery && delivery.status !== "processed") {
           delivery.nativeTurnId = session.turnId;
