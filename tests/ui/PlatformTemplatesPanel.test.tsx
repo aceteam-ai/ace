@@ -25,6 +25,8 @@ async function enter(service = new SyntheticPlatformTemplates(), columns = 80, r
   await press(view, "\u001b"); for (let i = 0; i < 5; i++) await press(view, "j"); await press(view, "\r");
   await vi.waitFor(() => expect(service.listCalls).toHaveLength(1));
   await vi.waitFor(() => expect(view.lastFrame()).toContain("[General]"));
+  await vi.waitFor(() => expect(view.lastFrame()).toContain("Type Search"));
+  await tick();
   return { service, view, panel };
 }
 async function inputs(view: ReturnType<typeof render>) {
@@ -61,11 +63,11 @@ describe("platform templates in the shared terminal", () => {
   it("loads only on entry and filters grouped metadata without starting runtime or execution", async () => {
     const { service, view } = await enter();
     expect(view.lastFrame()).toContain("[Analysis]"); expect(view.lastFrame()).toContain("[General]");
-    await press(view, "summary"); expect(view.lastFrame()).toContain("1 templates"); expect(view.lastFrame()).not.toContain("Synthetic analysis");
-    await press(view, "\t"); expect(view.lastFrame()).toContain("No matching templates");
-    await press(view, "\t"); expect(view.lastFrame()).toContain("Synthetic summary");
+    await press(view, "summary"); await vi.waitFor(() => expect(view.lastFrame()).toContain("1 templates")); expect(view.lastFrame()).not.toContain("Synthetic analysis");
+    await press(view, "\t"); await vi.waitFor(() => expect(view.lastFrame()).toContain("No matching templates"));
+    await press(view, "\t"); await vi.waitFor(() => expect(view.lastFrame()).toContain("Synthetic summary"));
     expect(service.listCalls).toHaveLength(1); expect(service.getCalls).toEqual([]); expect(service.runCalls).toEqual([]);
-    await press(view, "\r"); expect(service.getCalls[0].summary.versionNumber).toBe(3); expect(service.runCalls).toEqual([]);
+    await press(view, "\r"); await vi.waitFor(() => expect(service.getCalls).toHaveLength(1)); expect(service.getCalls[0].summary.versionNumber).toBe(3); expect(service.runCalls).toEqual([]);
   });
   it("preserves typed defaults and structured input through explicit remote review, with no implicit or duplicate submission", async () => {
     const { service, view } = await enter(); await inputs(view);
@@ -100,6 +102,7 @@ describe("platform templates in the shared terminal", () => {
     await press(view, "y"); expect(service.runCalls).toEqual([]);
     Object.defineProperty(view.stdout, "rows", { value: 24, configurable: true }); view.stdout.emit("resize"); await tick();
     await readAll(view, "y Submit platform run (uses credits)"); await press(view, "y");
+    await vi.waitFor(() => expect(service.runCalls).toHaveLength(1));
     expect(service.runCalls[0].input.prompt).toBe(text);
   });
   it("shows escaped control characters in the full review and reports redacted errors as failures", async () => {
@@ -110,8 +113,8 @@ describe("platform templates in the shared terminal", () => {
     let pages = 0; let review = "";
     while (!view.lastFrame()?.includes("y Submit platform run") && pages++ < 40) { review += view.lastFrame(); await press(view, "\u001b[6~"); }
     review += view.lastFrame(); expect(review).toContain("\\u007f\\u0085\\u009b31m");
-    await press(view, "y"); expect(service.runCalls[0].input.prompt).toBe(prompt);
-    expect(view.lastFrame()).toContain("Execution failed"); expect(view.lastFrame()).toContain("reported an execution error");
+    await press(view, "y"); await vi.waitFor(() => expect(service.runCalls).toHaveLength(1)); expect(service.runCalls[0].input.prompt).toBe(prompt);
+    await vi.waitFor(() => expect(view.lastFrame()).toContain("Execution failed")); expect(view.lastFrame()).toContain("reported an execution error");
   });
   it("shows inaccessible-graph errors and blocks local and remote actions", async () => {
     const service = new SyntheticPlatformTemplates(); service.getError = new Error("This listed template graph is unavailable for this platform connection.");
