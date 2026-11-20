@@ -75,7 +75,7 @@ describe("terminal workspace", () => {
     view.stdin.write("\r");
     await tick();
 
-    expect(executePattern).toHaveBeenCalledWith("summarize", "hello", expect.not.objectContaining({ model: expect.anything() }));
+    await vi.waitFor(() => expect(executePattern).toHaveBeenCalledWith("summarize", "hello", expect.not.objectContaining({ model: expect.anything() })));
   });
 
   it("keeps long task input bounded while submitting the complete value", async () => {
