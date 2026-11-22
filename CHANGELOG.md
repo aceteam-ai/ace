@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 - 2026-11-22
+
+### Session liveness hooks
+
+- Claude Code liveness hooks now include a `PreToolUse` observer for `AskUserQuestion`. The session reports as blocked on `human:input` while it waits for an operator answer. The hook only observes: it returns no decision and never answers or blocks the question (#35).
+
 ## 0.5.0 - 2026-11-19
 
 ### Local WorkflowGraphs
