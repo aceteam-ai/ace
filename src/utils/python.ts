@@ -10,7 +10,14 @@ import { WORKFLOW_PYTHON_RUNNER } from "./workflow-python-runner.js";
 
 export const UV_VERSION = "0.12.12";
 export const ACETEAM_NODES_SPEC = "aceteam-nodes[llm]==0.8.0";
-export const WORKFLOW_ENGINE_SPEC = "aceteam-workflow-engine==2.0.0rc20";
+export const WORKFLOW_ENGINE_SPEC = "aceteam-workflow-engine==2.0.0rc22";
+export function getManagedVenvDir(configVenv?: string): string {
+  const aceDir = join(homedir(), ".ace");
+  const legacyDir = join(aceDir, "venv");
+  const previousManagedDir = join(aceDir, "venv-workflow2-rc20");
+  return configVenv && configVenv !== legacyDir && configVenv !== previousManagedDir
+    ? configVenv : join(aceDir, "venv-workflow2-rc22");
+}
 const UV_INSTALLER_SHA256 = {
   win32: "00b69ae502ad6a6c5af9d606559a29f218374f086cafa89bc2f6408a1f3e24b5",
   default: "f4f45f7f5f213d96efc1978b8772b2c037d495d9161ffa7468f8167c6b031033",
@@ -204,9 +211,7 @@ export async function installAceteamNodes(pythonPath: string, options?: Operatio
     if (result.code !== 0) throw new Error(result.stderr.trim() || "Could not install the Ace workflow runtime");
     return;
   }
-  const configVenv = loadConfig().venv_dir;
-  const managedVenv = configVenv && configVenv !== join(homedir(), ".ace", "venv")
-    ? configVenv : join(homedir(), ".ace", "venv-workflow2-rc20");
+  const managedVenv = getManagedVenvDir(loadConfig().venv_dir);
   if (pythonPath === getVenvPythonPath(managedVenv)) {
     // Explicit `ace init` may create the managed venv with stdlib first.
     execFileSync(pythonPath, ["-m", "pip", "install", ACETEAM_NODES_SPEC, WORKFLOW_ENGINE_SPEC], {

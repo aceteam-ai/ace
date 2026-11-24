@@ -6,7 +6,7 @@ import json
 import sys
 from pathlib import Path
 
-ENGINE_VERSION = "2.0.0rc20"
+ENGINE_VERSION = "2.0.0rc22"
 NODES_VERSION = "0.8.0"
 
 
