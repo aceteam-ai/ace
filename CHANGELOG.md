@@ -5,7 +5,7 @@
 ### Local workflow runtime
 
 - Pin the managed local runtime to workflow-engine 2.0.0rc22 with aceteam-nodes 0.8.0. Ordinary Decimal workflow outputs are now JSON numbers instead of strings; very high-precision values still come back as strings (#63).
-- The managed environment moves to `~/.ace/venv-workflow2-rc22`. Existing installs on the previous managed `~/.ace/venv-workflow2-rc20` are moved to the new path on the next run or `ace init`. A custom `venv_dir` is upgraded in place. The old environment is left on disk (#63).
+- The managed environment moves to `~/.ace/venv-workflow2-rc22`. Installs configured for the previous managed `~/.ace/venv-workflow2-rc20` switch to a freshly provisioned rc22 environment on the next run or `ace init`. A custom `venv_dir` is upgraded in place. The old environment is left on disk (#63).
 
 ## 0.5.1 - 2026-11-22
 
