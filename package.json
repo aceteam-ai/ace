@@ -1,6 +1,6 @@
 {
   "name": "@aceteam/ace",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "AceTeam control-plane CLI and local workflow runner",
   "type": "module",
   "bin": {
