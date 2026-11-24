@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 vi.mock("node:fs", () => ({ existsSync: vi.fn(() => true) }));
 vi.mock("../../src/utils/config.js", () => ({ loadConfig: vi.fn(() => ({})), saveConfig: vi.fn() }));
@@ -11,7 +13,7 @@ vi.mock("../../src/utils/python.js", () => ({
 }));
 
 import { loadConfig, saveConfig } from "../../src/utils/config.js";
-import { createVenv, installAceteamNodes, isAceteamNodesReady } from "../../src/utils/python.js";
+import { createVenv, getVenvPythonPath, installAceteamNodes, isAceteamNodesReady } from "../../src/utils/python.js";
 import { ensurePython, resetPythonBootstrapForTests } from "../../src/utils/ensure-python.js";
 
 const ready = vi.mocked(isAceteamNodesReady);
@@ -40,6 +42,17 @@ describe("lazy Python bootstrap", () => {
     expect(createVenv).not.toHaveBeenCalled();
     expect(install).toHaveBeenCalledOnce();
     expect(saveConfig).toHaveBeenCalledWith(expect.objectContaining({ patterns_dir: "/keep", python_path: "/managed/bin/python" }));
+  });
+
+  it("moves the previous managed rc20 environment to the rc22 path", async () => {
+    const previous = join(homedir(), ".ace", "venv-workflow2-rc20");
+    const current = join(homedir(), ".ace", "venv-workflow2-rc22");
+    vi.mocked(loadConfig).mockReturnValue({ python_path: join(previous, "bin", "python"), venv_dir: previous });
+    ready.mockImplementation(async () => install.mock.calls.length > 0);
+
+    await expect(ensurePython()).resolves.toBe("/managed/bin/python");
+    expect(getVenvPythonPath).toHaveBeenCalledWith(current);
+    expect(saveConfig).toHaveBeenCalledWith(expect.objectContaining({ venv_dir: current }));
   });
 
   it("retries after a failed install", async () => {

@@ -128,20 +128,20 @@ describe("installAceteamNodes", () => {
 
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "/usr/bin/uv",
-      ["pip", "install", "aceteam-nodes[llm]==0.8.0", "aceteam-workflow-engine==2.0.0rc20", "--python", "/home/user/.ace/venv/bin/python"],
+      ["pip", "install", "aceteam-nodes[llm]==0.8.0", "aceteam-workflow-engine==2.0.0rc22", "--python", "/home/user/.ace/venv/bin/python"],
       { stdio: ["ignore", "inherit", "inherit"] }
     );
   });
 
   it("installs through pip in the new managed RC venv when uv is unavailable", async () => {
     mockWhich.mockRejectedValue(new Error("not found"));
-    const managedPython = getVenvPythonPath(join(homedir(), ".ace", "venv-workflow2-rc20"));
+    const managedPython = getVenvPythonPath(join(homedir(), ".ace", "venv-workflow2-rc22"));
 
     await installAceteamNodes(managedPython);
 
     expect(mockExecFileSync).toHaveBeenCalledWith(
       managedPython,
-      ["-m", "pip", "install", "aceteam-nodes[llm]==0.8.0", "aceteam-workflow-engine==2.0.0rc20"],
+      ["-m", "pip", "install", "aceteam-nodes[llm]==0.8.0", "aceteam-workflow-engine==2.0.0rc22"],
       { stdio: ["ignore", "inherit", "inherit"] }
     );
   });

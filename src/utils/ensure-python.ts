@@ -38,8 +38,9 @@ async function ready(path: string | undefined, signal?: AbortSignal): Promise<bo
 async function bootstrap(options: OperationOptions): Promise<string> {
   const config = loadConfig();
   const legacyDir = join(homedir(), ".ace", "venv");
-  const venvDir = config.venv_dir && config.venv_dir !== legacyDir
-    ? config.venv_dir : join(homedir(), ".ace", "venv-workflow2-rc20");
+  const previousManagedDir = join(homedir(), ".ace", "venv-workflow2-rc20");
+  const venvDir = config.venv_dir && config.venv_dir !== legacyDir && config.venv_dir !== previousManagedDir
+    ? config.venv_dir : join(homedir(), ".ace", "venv-workflow2-rc22");
   const managedPython = getVenvPythonPath(venvDir);
 
   if (await ready(config.python_path, options.signal)) return config.python_path!;

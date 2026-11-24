@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,13 +19,13 @@ afterEach(() => {
 });
 
 describe("pinned workflow-engine example set", () => {
-  it("keeps the three tagged rc20 graph files byte-for-byte", () => {
+  it("keeps the three tagged rc22 graph files byte-for-byte", () => {
     const hashes = {
       addition: "2b733a9e08133e80cb21b61c57d9e0f5662c96ba6168773f7573d9d983e5f50c",
       append: "5357ba8dd7e3cc457ad42b4494ca2d807599e41c7c24f222907c131a3b5ff0de",
       error: "cdf042423c00b23f465d3157694e2bf3535578ad32a3699a8b16af85e8ec0d3b",
     };
-    const upstream = TEMPLATES.filter((template) => template.source === "workflow-engine-v2.0.0rc20");
+    const upstream = TEMPLATES.filter((template) => template.source === "workflow-engine-v2.0.0rc22");
     expect(upstream.map((template) => template.id)).toEqual(Object.keys(hashes).map((id) => `workflow-engine-${id}`));
     for (const [name, expected] of Object.entries(hashes)) {
       const file = new URL(`../../src/templates/workflow-engine-${name}.json`, import.meta.url);
@@ -34,6 +35,21 @@ describe("pinned workflow-engine example set", () => {
 });
 
 describe.skipIf(!python)("published workflow-engine 2.0 RC boundary", () => {
+  it("preserves rc22 Decimal JSON numbers at the Ace output boundary", () => {
+    const script = [
+      "import json",
+      "from decimal import Decimal",
+      "from workflow_engine.core.values.json import JSONValue",
+      "value = JSONValue({'ordinary': Decimal('12.5'), 'precise': Decimal('1.0000000000000000000000001')})",
+      "print(json.dumps(value.model_dump(mode='json')))",
+    ].join("\n");
+    const result = JSON.parse(execFileSync(python!, ["-c", script], { encoding: "utf8" }));
+    expect(result.ordinary).toBe(12.5);
+    expect(typeof result.ordinary).toBe("number");
+    expect(JSON.stringify(result)).toContain('"ordinary":12.5');
+    expect(result.precise).toBe("1.0000000000000000000000001");
+  });
+
   it("validates every bundled task and example against the pinned engine", async () => {
     directory = mkdtempSync(join(tmpdir(), "ace-rc-bundle-test-"));
     const graphs = [
