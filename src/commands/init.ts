@@ -13,6 +13,7 @@ import {
   getPythonVersion,
   createVenv,
   getVenvPythonPath,
+  getManagedVenvDir,
   isVenvValid,
   installAceteamNodes,
   isAceteamNodesInstalled,
@@ -27,8 +28,7 @@ import {
 import { DEMOS } from "../demos/index.js";
 import * as output from "../utils/output.js";
 
-const LEGACY_VENV_DIR = join(homedir(), ".ace", "venv");
-const DEFAULT_VENV_DIR = join(homedir(), ".ace", "venv-workflow2-rc22");
+const DEFAULT_VENV_DIR = getManagedVenvDir();
 
 // ── Exported setup functions (reusable by TUI) ──────────────
 
@@ -138,7 +138,7 @@ export const initCommand = new Command("init")
     console.log(chalk.bold("\n2. Virtual environment"));
 
     const config = existsSync(configPath) ? loadConfig() : {};
-    const venvDir = config.venv_dir && config.venv_dir !== LEGACY_VENV_DIR ? config.venv_dir : DEFAULT_VENV_DIR;
+    const venvDir = getManagedVenvDir(config.venv_dir);
 
     if (isVenvValid(venvDir)) {
       const venvPython = getVenvPythonPath(venvDir);

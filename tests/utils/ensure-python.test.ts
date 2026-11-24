@@ -4,7 +4,8 @@ import { join } from "node:path";
 
 vi.mock("node:fs", () => ({ existsSync: vi.fn(() => true) }));
 vi.mock("../../src/utils/config.js", () => ({ loadConfig: vi.fn(() => ({})), saveConfig: vi.fn() }));
-vi.mock("../../src/utils/python.js", () => ({
+vi.mock("../../src/utils/python.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/python.js")>()),
   createVenv: vi.fn(async () => {}),
   getPythonVersion: vi.fn(() => ({ major: 3, minor: 12, patch: 3 })),
   getVenvPythonPath: vi.fn(() => "/managed/bin/python"),
