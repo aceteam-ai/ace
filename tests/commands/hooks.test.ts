@@ -168,12 +168,16 @@ describe("liveness hook installation", () => {
     expect(output).not.toContain("PRIVATE_VALUE");
   });
 
-  it("never installs a permission decision hook and binds Claude session identity", () => {
+  it("installs a passive permission observer and binds Claude session identity", () => {
     const config = livenessHooks("claude-code");
-    expect(config.hooks.PermissionRequest).toBeUndefined();
+    expect(config.hooks.PermissionRequest).toEqual([{
+      matcher: "^(?!AskUserQuestion$).*",
+      hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "blocked", blocked_on: "human:permission", reason: "Waiting for operator permission", format: "hook" }, timeout: 1.5 }],
+    }]);
     expect(config.hooks.UserPromptSubmit[0].hooks[0].input.harness_session_id).toBe("${session_id}");
     expect(config.hooks.SessionEnd).toBeUndefined();
-    expect(config.hooks.Notification.map(group => group.matcher)).toEqual(["permission_prompt", "elicitation_dialog", "idle_prompt"]);
+    expect(config.hooks.Notification.map(group => group.matcher)).toEqual(["elicitation_dialog", "idle_prompt"]);
+    expect(JSON.stringify(config)).not.toMatch(/permissionDecision|updatedInput|hookSpecificOutput/);
   });
 });
 
@@ -260,12 +264,14 @@ describe("built CLI diagnostic boundary", () => {
         matcher: "AskUserQuestion", hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "blocked", blocked_on: "human:input", reason: "Waiting for an operator answer", format: "hook" }, timeout: 1.5 }],
       }]);
       expect(status.stdout).toContain("PreToolUse (AskUserQuestion): session_heartbeat");
-      expect(config.hooks.Notification.map((group: { matcher: string }) => group.matcher)).toEqual(["permission_prompt", "elicitation_dialog", "idle_prompt"]);
+      expect(config.hooks.Notification.map((group: { matcher: string }) => group.matcher)).toEqual(["elicitation_dialog", "idle_prompt"]);
+      expect(config.hooks.PermissionRequest[0].matcher).toBe("^(?!AskUserQuestion$).*");
+      expect(status.stdout).toContain("PermissionRequest (^(?!AskUserQuestion$).*): session_heartbeat");
     } else {
       expect(config.hooks.PreToolUse).toBeUndefined();
+      expect(config.hooks.PermissionRequest).toBeUndefined();
       expect(config.hooks.Notification).toBeUndefined();
     }
-    expect(config.hooks.PermissionRequest).toBeUndefined();
     expect(config.hooks.Elicitation).toBeUndefined();
     expect(config.hooks.ElicitationResult).toBeUndefined();
     expect(JSON.stringify(config)).not.toMatch(/permissionDecision|updatedInput|hookSpecificOutput|Authorization|Bearer/);

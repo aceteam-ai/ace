@@ -27,10 +27,12 @@ describe("S2 blocked-state installer companion", () => {
     expect(config.hooks.PostToolUse).toEqual([{
       hooks: [{ type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "busy", format: "hook" }, timeout: 1.5 }],
     }]);
-    expect(config.hooks.Notification.map(group => group.matcher)).toEqual(["permission_prompt", "elicitation_dialog", "idle_prompt"]);
-    expect(config.hooks.Notification[1].hooks[0].input).toEqual({ state: "blocked", blocked_on: "human:input", reason: "Waiting for operator input", format: "hook" });
+    expect(config.hooks.Notification.map(group => group.matcher)).toEqual(["elicitation_dialog", "idle_prompt"]);
+    expect(config.hooks.Notification[0].hooks[0].input).toEqual({ state: "blocked", blocked_on: "human:input", reason: "Waiting for operator input", format: "hook" });
     expect(config.hooks.Stop[0].hooks[0].input).toEqual({ drain: true, format: "hook", idle_on_empty: true });
-    expect(config.hooks.PermissionRequest).toBeUndefined();
+    expect(config.hooks.PermissionRequest[0].matcher).toBe("^(?!AskUserQuestion$).*");
+    expect(new RegExp(config.hooks.PermissionRequest[0].matcher! ).test("AskUserQuestion")).toBe(false);
+    expect(new RegExp(config.hooks.PermissionRequest[0].matcher! ).test("Bash")).toBe(true);
     expect(config.hooks.Elicitation).toBeUndefined();
     expect(config.hooks.ElicitationResult).toBeUndefined();
     expect(JSON.stringify(config).toLowerCase()).not.toMatch(/permissiondecision|updatedinput|hookspecificoutput|authorization|bearer|api_key|api-key|token/);
@@ -66,6 +68,19 @@ describe("S2 blocked-state installer companion", () => {
     expect(await installHooks("claude-code", "user", undefined, home, home)).toEqual([`${path}: no changes`]);
     expect(await readFile(path, "utf8")).toBe(installedBytes);
     expect(await readdir(join(home, ".claude"))).toEqual(["settings.json"]);
+  });
+
+  it("replaces the delayed permission observer without removing neighboring hooks", () => {
+    const prior = livenessHooks("claude-code", "fixture-machine");
+    delete prior.hooks.PermissionRequest;
+    const old = { type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "blocked", blocked_on: "human:permission", reason: "Waiting for operator permission", format: "hook" }, timeout: 1.5 };
+    const custom = { type: "command", command: "notify-operator" };
+    prior.hooks.Notification.unshift({ matcher: "permission_prompt", hooks: [custom, old] });
+    const merged = mergeHooks(prior, livenessHooks("claude-code", "fixture-machine"));
+    expect(merged.changes).toContain("remove Notification (permission_prompt) session_heartbeat");
+    expect(merged.config.hooks.Notification[0]).toEqual({ matcher: "permission_prompt", hooks: [custom] });
+    expect(merged.config.hooks.PermissionRequest[0].matcher).toBe("^(?!AskUserQuestion$).*");
+    expect(mergeHooks(merged.config, livenessHooks("claude-code", "fixture-machine")).changes).toEqual([]);
   });
 
   it("preserves neighboring custom observers while upgrading and deduplicating its own", () => {
