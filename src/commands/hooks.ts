@@ -14,8 +14,9 @@ type HookConfig = JsonObject & { hooks: Record<string, Group[]> };
 
 class HookConfigError extends Error {}
 
-const knownEvents = new Set(["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd", "Notification"]);
-const knownMatchers = new Set(["AskUserQuestion", "permission_prompt", "elicitation_dialog", "idle_prompt"]);
+const knownEvents = new Set(["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "Stop", "SessionEnd", "Notification"]);
+const nonQuestionPermissionMatcher = "^(?!AskUserQuestion$).*";
+const knownMatchers = new Set(["AskUserQuestion", nonQuestionPermissionMatcher, "permission_prompt", "elicitation_dialog", "idle_prompt"]);
 const knownTools = new Set(["session_heartbeat", "session_inbox", "session_unregister", "session_register"]);
 
 function bindingLabel(event: string, group: Group, hook: JsonObject): string {
@@ -42,8 +43,11 @@ export function livenessHooks(harness: Harness, machine = hostname(), name?: str
     hooks.SessionStart = [group(handler("session_heartbeat", registration, 3))];
   } else {
     hooks.PreToolUse = [group(handler("session_heartbeat", { state: "blocked", blocked_on: "human:input", reason: "Waiting for an operator answer" }), "AskUserQuestion")];
+    // The delayed permission_prompt notification also fires while a question is
+    // open and has no tool identity. PermissionRequest has a tool matcher, so it
+    // can label real permission dialogs without overwriting AskUserQuestion.
+    hooks.PermissionRequest = [group(handler("session_heartbeat", { state: "blocked", blocked_on: "human:permission", reason: "Waiting for operator permission" }), nonQuestionPermissionMatcher)];
     hooks.Notification = [
-      group(handler("session_heartbeat", { state: "blocked", blocked_on: "human:permission", reason: "Waiting for operator permission" }), "permission_prompt"),
       group(handler("session_heartbeat", { state: "blocked", blocked_on: "human:input", reason: "Waiting for operator input" }), "elicitation_dialog"),
       group(handler("session_heartbeat", { state: "idle" }), "idle_prompt"),
     ];
@@ -72,6 +76,20 @@ function parseConfig(text: string): HookConfig {
 export function mergeHooks(existing: HookConfig, desired: HookConfig): { config: HookConfig; changes: string[] } {
   const config = structuredClone(existing);
   const changes: string[] = [];
+  // Remove only our obsolete delayed permission observer. Keep neighboring
+  // user hooks on the same matcher and every other notification untouched.
+  if (desired.hooks.PermissionRequest && config.hooks.Notification) {
+    config.hooks.Notification = config.hooks.Notification.flatMap(group => {
+      if (group.matcher !== "permission_prompt") return [group];
+      const hooks = group.hooks.filter(hook => {
+        const obsolete = hook.type === "mcp_tool" && hook.server === "aceteam" && hook.tool === "session_heartbeat" && isDeepStrictEqual(hook.input, { state: "blocked", blocked_on: "human:permission", reason: "Waiting for operator permission", format: "hook" });
+        if (obsolete) changes.push("remove Notification (permission_prompt) session_heartbeat");
+        return !obsolete;
+      });
+      return hooks.length ? [{ ...group, hooks }] : [];
+    });
+    if (!config.hooks.Notification.length) delete config.hooks.Notification;
+  }
   if (!desired.hooks.SessionStart && config.hooks.SessionStart) {
     config.hooks.SessionStart = config.hooks.SessionStart.flatMap(group => {
       const hooks = group.hooks.filter(hook => {

@@ -34,7 +34,8 @@ MCP connection and contain no credentials. User input records busy; Stop
 drains pending messages before declaring idle. Both harnesses refresh busy
 presence after supported tool completions, including local tools. MCP hooks
 reuse the connection without triggering other hooks. Claude Code additionally
-observes permission and input notifications.
+observes permission requests and input notifications. Its delayed permission
+notification is not used for state because it can arrive during an open question.
 These notifications need the companion blocked-state backend slice.
 
 Claude Code also declares `human:input` before `AskUserQuestion`. Its existing
@@ -43,7 +44,8 @@ including successful MCP tools that requested elicitation. Stop's idle signal
 also clears it. These observers never supply an answer or change a permission
 decision. The blocked-state backend is aceteam-ai/aceteam#10479, part of
 aceteam-ai/aceteam#10470. Actual question and elicitation event sequences still
-require operator-driven live verification. Codex remains declaration-only.
+require operator-driven live verification. Esc cancellation has no confirmed
+cleanup hook; a later prompt resets the state. Codex remains declaration-only.
 
 Codex requires operator trust review before changed hooks can run. Its
 current MCP runtime does not support SessionEnd, so the installer omits
