@@ -82,7 +82,7 @@ export function mergeHooks(existing: HookConfig, desired: HookConfig): { config:
     config.hooks.Notification = config.hooks.Notification.flatMap(group => {
       if (group.matcher !== "permission_prompt") return [group];
       const hooks = group.hooks.filter(hook => {
-        const obsolete = hook.type === "mcp_tool" && hook.server === "aceteam" && hook.tool === "session_heartbeat" && object(hook.input) && hook.input.blocked_on === "human:permission";
+        const obsolete = hook.type === "mcp_tool" && hook.server === "aceteam" && hook.tool === "session_heartbeat" && isDeepStrictEqual(hook.input, { state: "blocked", blocked_on: "human:permission", reason: "Waiting for operator permission", format: "hook" });
         if (obsolete) changes.push("remove Notification (permission_prompt) session_heartbeat");
         return !obsolete;
       });

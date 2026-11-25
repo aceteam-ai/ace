@@ -75,10 +75,11 @@ describe("S2 blocked-state installer companion", () => {
     delete prior.hooks.PermissionRequest;
     const old = { type: "mcp_tool", server: "aceteam", tool: "session_heartbeat", input: { state: "blocked", blocked_on: "human:permission", reason: "Waiting for operator permission", format: "hook" }, timeout: 1.5 };
     const custom = { type: "command", command: "notify-operator" };
-    prior.hooks.Notification.unshift({ matcher: "permission_prompt", hooks: [custom, old] });
+    const peer = { ...old, input: { ...old.input, ref: "separate-observer" } };
+    prior.hooks.Notification.unshift({ matcher: "permission_prompt", hooks: [custom, old, peer] });
     const merged = mergeHooks(prior, livenessHooks("claude-code", "fixture-machine"));
     expect(merged.changes).toContain("remove Notification (permission_prompt) session_heartbeat");
-    expect(merged.config.hooks.Notification[0]).toEqual({ matcher: "permission_prompt", hooks: [custom] });
+    expect(merged.config.hooks.Notification[0]).toEqual({ matcher: "permission_prompt", hooks: [custom, peer] });
     expect(merged.config.hooks.PermissionRequest[0].matcher).toBe("^(?!AskUserQuestion$).*");
     expect(mergeHooks(merged.config, livenessHooks("claude-code", "fixture-machine")).changes).toEqual([]);
   });
